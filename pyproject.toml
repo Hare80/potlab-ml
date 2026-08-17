@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "potlab-ml"
+version = "0.1.0"
+description = "A small, model-agnostic framework for training machine-learned potentials (MLPs) on molecular and periodic systems."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "tensorboard>=2.14",
+    "matplotlib>=3.8",
+    "ase>=3.22",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}          # src-layout: all packages live under src/
+packages = [                        # hand-written list: add one line per new subpackage
+    "potlab",
+    "potlab.data",
+    "potlab.models",
+    "potlab.models.painn",
+    "potlab.training",
+    "potlab.export",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

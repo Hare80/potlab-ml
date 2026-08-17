@@ -1,0 +1,37 @@
+run_name: baseline
+seed: 0
+
+model:
+  name: painn                      # key in MODELS registry
+  num_message_passing_layers: 3
+  num_features: 128
+  num_rbf_features: 20
+  num_unique_atoms: 100
+  cutoff_dist: 5.0
+  num_outputs: 1
+
+data:
+  name: qm9                        # key in DATASETS registry
+  target: 7                        # QM9 property (U0)
+  data_dir: data/
+  splits: [110000, 10000, 10831]
+  batch_size_train: 100
+  batch_size_inference: 1000
+  num_workers: 0
+
+training:
+  num_epochs: 1000
+  lr: 5.0e-4
+  weight_decay: 0.01
+  optimizer: adamw
+  scheduler: cosine                 # T_max = total steps
+  loss:
+    energy: 1.0
+    forces: null                    # set e.g. 0.1 to engage the force term
+  early_stopping:
+    patience: 30
+    min_epochs: 1000
+
+export:
+  out: model.pt
+  path: torchscript                # torchscript (primary) | mliap (generic)
