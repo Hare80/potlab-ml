@@ -1,0 +1,234 @@
+"""QM9 data module and standardizer.
+
+Loads QM9 (target property, seeded shuffle, three-way split), yields
+batches under the DESIGN.md §3 contract, and standardizes targets with
+QM9's built-in per-element atom references.
+"""
+
+import warnings
+from typing import Callable, List, Optional, Union
+
+import numpy as np
+import torch
+from torch import Tensor
+from torch_geometric.datasets import QM9
+from torch_geometric.loader import DataLoader
+
+from potlab.data.base import BaseDataModule, Standardizer
+from potlab.data.transforms import GetTarget
+from potlab.registry import register_dataset
+
+# QM9 properties that are not energies (dipole moment, heat capacity, ...):
+# their native units are kept for display instead of converting eV -> meV.
+NO_UNIT_CONVERSION = {0, 1, 5, 11, 16, 17, 18}
+
+
+def _num_atoms_per_graph(graph_indexes: Tensor) -> Tensor:
+    """Atom count per molecule, [N_graphs, 1]. Batch indices are contiguous 0..N-1."""
+    return torch.bincount(graph_indexes).unsqueeze(-1)
+
+
+def _sum_per_graph(values: Tensor, graph_indexes: Tensor, n_graphs: int) -> Tensor:
+    """Sum per-atom values into [N_graphs, num_outputs] rows."""
+    out = torch.zeros(
+        n_graphs, values.shape[-1], device=values.device, dtype=values.dtype
+    )
+    out.index_add_(dim=0, index=graph_indexes, source=values)
+    return out
+
+
+class Qm9Standardizer(Standardizer):
+    """QM9 target standardization (the original get_target_stats, rehomed).
+
+    Pipeline, mirrored exactly by ``inverse``:
+
+    1. subtract per-element atom references (QM9's atomref table)
+    2. divide by atom count (per-molecule average)
+    3. shift/scale with train-set mean and std
+    """
+
+    def fit(self, train_data: "QM9DataModule") -> None:
+        # Statistics come from the TRAIN split only - touching val/test
+        # here would leak information.
+        atom_refs = train_data.data_train.atomref(train_data.target)
+
+        ys = []
+        for batch in train_data.train_dataloader(shuffle=False):
+            y = batch.y.clone()  # clone: never mutate the dataset in place
+            # Step 1: subtract the molecule's atom-reference sum.
+            y.index_add_(dim=0, index=batch.batch, source=-atom_refs[batch.z])
+            # Step 2: divide by atom count (per-atom average).
+            _, num_atoms = torch.unique(batch.batch, return_counts=True)
+            y = y / num_atoms.unsqueeze(-1)
+            ys.append(y)
+
+        y = torch.cat(ys, dim=0)
+        # Step 3: shift/scale statistics, computed on the transformed labels.
+        self.mean = y.mean()
+        self.std = y.std()
+        self.atom_refs = atom_refs
+
+    def _stats_on(self, device: torch.device):
+        """Statistics moved to the caller's device.
+
+        fit() runs on CPU; transform/inverse may be called with GPU tensors,
+        and cross-device arithmetic raises. Not an nn.Module, so the move is
+        explicit here (a no-op when the input is already on CPU).
+        """
+        return self.mean.to(device), self.std.to(device), self.atom_refs.to(device)
+
+    def transform(self, y: Tensor, z: Tensor, graph_indexes: Tensor) -> Tensor:
+        """Labels -> standardized space: ((y - refs) / n_atoms - mean) / std."""
+        mean, std, atom_refs = self._stats_on(y.device)
+        n_graphs = y.shape[0]
+        refs = _sum_per_graph(atom_refs[z], graph_indexes, n_graphs)
+        per_atom = (y - refs) / _num_atoms_per_graph(graph_indexes)
+        return (per_atom - mean) / std
+
+    def inverse(self, energy_pred: Tensor, z: Tensor, graph_indexes: Tensor) -> Tensor:
+        """Model energies -> physical units: (E * std + mean) * n_atoms + refs."""
+        mean, std, atom_refs = self._stats_on(energy_pred.device)
+        n_graphs = energy_pred.shape[0]
+        per_atom = energy_pred * std + mean
+        unscaled = per_atom * _num_atoms_per_graph(graph_indexes)
+        return unscaled + _sum_per_graph(atom_refs[z], graph_indexes, n_graphs)
+
+    def state_dict(self) -> dict:
+        """Statistics needed to reproduce transform/inverse - saved with checkpoints."""
+        return {"mean": self.mean, "std": self.std, "atom_refs": self.atom_refs}
+
+    def load_state_dict(self, state: dict) -> None:
+        self.mean = state["mean"]
+        self.std = state["std"]
+        self.atom_refs = state["atom_refs"]
+
+
+@register_dataset("qm9")
+class QM9DataModule(BaseDataModule):
+    """QM9 under the BaseDataModule protocol.
+
+    Splits: seeded global shuffle, then train/val/test by index. The third
+    split number documents the expected test size; the test set actually
+    takes everything train+val leave over (the original behavior, kept).
+    """
+
+    def __init__(
+        self,
+        target: int = 7,
+        data_dir: str = "data/",
+        batch_size_train: int = 100,
+        batch_size_eval: int = 1000,
+        num_workers: int = 0,
+        splits: Union[List[int], List[float]] = [110000, 10000, 10831],
+        seed: int = 0,
+        subset_size: Optional[int] = None,
+    ) -> None:
+        self.target = target
+        self.data_dir = data_dir
+        self.batch_size_train = batch_size_train
+        self.batch_size_eval = batch_size_eval
+        self.num_workers = num_workers
+        self.splits = splits
+        self.seed = seed
+        self.subset_size = subset_size  # debug: cap the dataset to N molecules
+
+        self.data_train = None
+        self.data_val = None
+        self.data_test = None
+
+    def prepare_data(self) -> None:
+        # First call downloads (~100 MB) and preprocesses; later calls skip.
+        QM9(root=self.data_dir)
+
+    def setup(self) -> None:
+        dataset = QM9(root=self.data_dir, transform=GetTarget(self.target))
+
+        # Seeded shuffle: same seed -> same order -> reproducible splits.
+        rng = np.random.default_rng(seed=self.seed)
+        dataset = dataset[rng.permutation(len(dataset))]
+
+        if self.subset_size is not None:
+            dataset = dataset[: self.subset_size]
+
+        # splits: all ints = molecule counts, all floats = proportions.
+        # Anything mixed is a config error, not a silent fallthrough.
+        if all(type(split) == int for split in self.splits):
+            split_sizes = self.splits
+        elif all(type(split) == float for split in self.splits):
+            split_sizes = [int(len(dataset) * prop) for prop in self.splits]
+        else:
+            raise ValueError(
+                f"Invalid splits: {self.splits}. Must be all int or all float."
+            )
+        if len(split_sizes) != 3:
+            raise ValueError(
+                f"Invalid splits: {self.splits}. Expected 3 values [train, val, test]."
+            )
+
+        split_idx = np.cumsum(split_sizes)
+        # Guard: train+val must leave at least one molecule for the test set.
+        if split_idx[1] >= len(dataset):
+            raise ValueError(
+                f"Invalid splits: {self.splits}. train + val ({split_idx[1]}) "
+                f"must be less than the dataset size ({len(dataset)})."
+            )
+
+        self.data_train = dataset[: split_idx[0]]
+        self.data_val = dataset[split_idx[0] : split_idx[1]]
+        self.data_test = dataset[split_idx[1] :]  # test = remainder
+
+        # The third number is documentation of the expected test size; warn
+        # when the actual remainder differs (a typo here used to silently
+        # change the test set). Float proportions are exempt: truncation
+        # means they never sum exactly.
+        if all(type(split) == int for split in self.splits):
+            actual_test = len(self.data_test)
+            if actual_test != split_sizes[2]:
+                warnings.warn(
+                    f"Test set has {actual_test} molecules, not the {split_sizes[2]} "
+                    "requested in splits (test takes whatever train+val leave over)."
+                )
+
+    def make_standardizer(self) -> Standardizer:
+        standardizer = Qm9Standardizer()
+        standardizer.fit(self)
+        return standardizer
+
+    def train_dataloader(self, shuffle: bool = True) -> DataLoader:
+        return DataLoader(
+            self.data_train,
+            batch_size=self.batch_size_train,
+            num_workers=self.num_workers,
+            shuffle=shuffle,
+            pin_memory=True,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.data_val,
+            batch_size=self.batch_size_eval,
+            num_workers=self.num_workers,
+            shuffle=False,
+            pin_memory=True,
+        )
+
+    def test_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.data_test,
+            batch_size=self.batch_size_eval,
+            num_workers=self.num_workers,
+            shuffle=False,
+            pin_memory=True,
+        )
+
+    @property
+    def has_forces(self) -> bool:
+        return False  # QM9 ships energies/properties, no forces
+
+    @property
+    def unit_conversion(self) -> Callable:
+        # Display only: energies are stored in eV and shown in meV;
+        # non-energy properties keep their native units.
+        if self.target in NO_UNIT_CONVERSION:
+            return lambda t: t
+        return lambda t: 1000.0 * t

@@ -22,7 +22,11 @@ htmlcov/
 # ---- ML training artifacts ----
 runs/*
 !runs/.gitkeep
-data/
+# Anchored to repo root: only the QM9 data folder, NOT the potlab/data/
+# package (an un-anchored data/ would hit both).
+# Note: gitignore treats only a line-starting # as a comment - inline
+# comments after a pattern are parsed as part of the pattern itself.
+/data/
 *.pt
 *.pth
 
