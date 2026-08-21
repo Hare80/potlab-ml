@@ -13,8 +13,8 @@ keeping behavior bit-identical (same shuffle seed, same transforms, same statist
 
 | Original code (`02456_painn_project-main`) | New home in potlab-ml | Notes |
 |---|---|---|
-| `GetTarget` (`src/data/qm9.py`) | `src/potlab/data/transforms.py` | Generic per-sample transform; keep the column-selection behavior, drop the dead None-branch |
-| `QM9DataModule` | `src/potlab/data/qm9.py` | Implement `BaseDataModule`; drop the `pl.LightningDataModule` dependency |
+| `GetTarget` (`src/data/qm9.py`) | `potlab/data/transforms.py` | Generic per-sample transform; keep the column-selection behavior, drop the dead None-branch |
+| `QM9DataModule` | `potlab/data/qm9.py` | Implement `BaseDataModule`; drop the `pl.LightningDataModule` dependency |
 | `unit_conversion` dict | `qm9.py` property | Display only (eV → meV for energy targets) |
 | `get_target_stats` | `Qm9Standardizer.fit/transform` | See below |
 | `AtomwisePostProcessing` | removed — replaced by `Qm9Standardizer.inverse` | The standardizer owns the inverse transform now |

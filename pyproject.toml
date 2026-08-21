@@ -23,7 +23,6 @@ dev = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}          # src-layout: all packages live under src/
 packages = [                        # hand-written list: add one line per new subpackage
     "potlab",
     "potlab.data",

@@ -24,7 +24,7 @@ These three decisions are made up front and are not revisited later:
 potlab-ml/
 ├── configs/default.yaml
 ├── scripts/{train,evaluate,export_lammps}.py
-├── src/potlab/
+├── potlab/
 │   ├── config.py, registry.py
 │   ├── data/{base,transforms,qm9}.py        (+ vasp.py in the future)
 │   ├── models/{base.py, painn/{core,model}.py}

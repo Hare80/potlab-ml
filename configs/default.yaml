@@ -16,7 +16,7 @@ data:
   data_dir: data/
   splits: [110000, 10000, 10831]
   batch_size_train: 100
-  batch_size_inference: 1000
+  batch_size_eval: 1000
   num_workers: 0
 
 training:

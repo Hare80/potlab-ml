@@ -24,7 +24,7 @@ potlab-ml/
 │   ├── train.py              # train / resume from config
 │   ├── evaluate.py           # test-set MAE of a checkpoint
 │   └── export_lammps.py      # TorchScript export
-├── src/potlab/
+├── potlab/
 │   ├── config.py             # dataclass config + YAML loader
 │   ├── registry.py           # model + dataset registries
 │   ├── data/                 # BaseDataModule, transforms, QM9, (future) VASP

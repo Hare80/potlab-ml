@@ -193,7 +193,7 @@ data:
   data_dir: data/
   splits: [110000, 10000, 10831]
   batch_size_train: 100
-  batch_size_inference: 1000
+  batch_size_eval: 1000
   num_workers: 0
 
 training:
@@ -220,7 +220,7 @@ and datasets add their own sections without touching the config loader.
 ## 9. Directory tree
 
 ```
-src/potlab/
+potlab/
 ├── config.py         # dataclass mirroring the YAML + loader + validation
 ├── registry.py       # MODELS / DATASETS dicts + decorators
 ├── data/

@@ -81,7 +81,7 @@ the plugin file following the MLIAP-Python conventions (model loading, unit and
 energy-convention declarations), and the standardizer baked into the wrapper the same way
 as Path A (LAMMPS still needs absolute energies).
 
-Document the plugin template in `src/potlab/export/lammps.py` alongside the TorchScript
+Document the plugin template in `potlab/export/lammps.py` alongside the TorchScript
 exporter, so the two paths share the standardizer-baking code and differ only in the
 artifact they produce (`.pt` file vs. Python plugin).
 
