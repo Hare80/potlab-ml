@@ -6,6 +6,7 @@ QM9's built-in per-element atom references.
 """
 
 import warnings
+from pathlib import Path
 from typing import Callable, List, Optional, Union
 
 import numpy as np
@@ -14,6 +15,7 @@ from torch import Tensor
 from torch_geometric.datasets import QM9
 from torch_geometric.loader import DataLoader
 
+from potlab import ROOT
 from potlab.data.base import BaseDataModule, Standardizer
 from potlab.data.transforms import GetTarget
 from potlab.registry import register_dataset
@@ -124,7 +126,10 @@ class QM9DataModule(BaseDataModule):
         subset_size: Optional[int] = None,
     ) -> None:
         self.target = target
-        self.data_dir = data_dir
+        # Anchor relative dirs to ROOT: the config's 'data/' means the
+        # repo-root data folder, never CWD-relative (a run started from
+        # scripts/ used to download QM9 into scripts/data/).
+        self.data_dir = ROOT / data_dir if not Path(data_dir).is_absolute() else Path(data_dir)
         self.batch_size_train = batch_size_train
         self.batch_size_eval = batch_size_eval
         self.num_workers = num_workers
@@ -170,7 +175,10 @@ class QM9DataModule(BaseDataModule):
         if split_idx[1] >= len(dataset):
             raise ValueError(
                 f"Invalid splits: {self.splits}. train + val ({split_idx[1]}) "
-                f"must be less than the dataset size ({len(dataset)})."
+                f"must be less than the dataset size ({len(dataset)}). "
+                "When using subset_size, scale the splits down to match "
+                "(e.g. [800, 100, 100] for a 1000-molecule subset, or use "
+                "proportions like [0.8, 0.1, 0.1])."
             )
 
         self.data_train = dataset[: split_idx[0]]
@@ -179,9 +187,10 @@ class QM9DataModule(BaseDataModule):
 
         # The third number is documentation of the expected test size; warn
         # when the actual remainder differs (a typo here used to silently
-        # change the test set). Float proportions are exempt: truncation
-        # means they never sum exactly.
-        if all(type(split) == int for split in self.splits):
+        # change the test set). Exempt: float proportions (truncation means
+        # they never sum exactly) and subset runs (every number is
+        # deliberately approximate there).
+        if all(type(split) == int for split in self.splits) and self.subset_size is None:
             actual_test = len(self.data_test)
             if actual_test != split_sizes[2]:
                 warnings.warn(
