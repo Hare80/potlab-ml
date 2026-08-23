@@ -39,6 +39,42 @@ def _sum_per_graph(values: Tensor, graph_indexes: Tensor, n_graphs: int) -> Tens
     return out
 
 
+def _validate_splits(
+    splits: Union[List[int], List[float]], n_mols: int
+) -> list[int]:
+    """Resolve and validate a splits spec into [train, val, test] counts.
+
+    All ints = molecule counts; all floats = proportions of the dataset.
+    Anything mixed is a config error, not a silent fallthrough. Extracted
+    from QM9DataModule.setup so the guard is testable without the QM9
+    download (the M4 data-contract tests pin the error paths).
+    """
+    if all(type(split) == int for split in splits):
+        split_sizes = splits
+    elif all(type(split) == float for split in splits):
+        split_sizes = [int(n_mols * prop) for prop in splits]
+    else:
+        raise ValueError(
+            f"Invalid splits: {splits}. Must be all int or all float."
+        )
+    if len(split_sizes) != 3:
+        raise ValueError(
+            f"Invalid splits: {splits}. Expected 3 values [train, val, test]."
+        )
+
+    split_idx = np.cumsum(split_sizes)
+    # Guard: train+val must leave at least one molecule for the test set.
+    if split_idx[1] >= n_mols:
+        raise ValueError(
+            f"Invalid splits: {splits}. train + val ({split_idx[1]}) "
+            f"must be less than the dataset size ({n_mols}). "
+            "When using subset_size, scale the splits down to match "
+            "(e.g. [800, 100, 100] for a 1000-molecule subset, or use "
+            "proportions like [0.8, 0.1, 0.1])."
+        )
+    return split_sizes
+
+
 class Qm9Standardizer(Standardizer):
     """QM9 target standardization (the original get_target_stats, rehomed).
 
@@ -155,31 +191,10 @@ class QM9DataModule(BaseDataModule):
         if self.subset_size is not None:
             dataset = dataset[: self.subset_size]
 
-        # splits: all ints = molecule counts, all floats = proportions.
-        # Anything mixed is a config error, not a silent fallthrough.
-        if all(type(split) == int for split in self.splits):
-            split_sizes = self.splits
-        elif all(type(split) == float for split in self.splits):
-            split_sizes = [int(len(dataset) * prop) for prop in self.splits]
-        else:
-            raise ValueError(
-                f"Invalid splits: {self.splits}. Must be all int or all float."
-            )
-        if len(split_sizes) != 3:
-            raise ValueError(
-                f"Invalid splits: {self.splits}. Expected 3 values [train, val, test]."
-            )
-
+        # The guard lives in _validate_splits (pure, unit-tested in M4);
+        # setup() only slices.
+        split_sizes = _validate_splits(self.splits, len(dataset))
         split_idx = np.cumsum(split_sizes)
-        # Guard: train+val must leave at least one molecule for the test set.
-        if split_idx[1] >= len(dataset):
-            raise ValueError(
-                f"Invalid splits: {self.splits}. train + val ({split_idx[1]}) "
-                f"must be less than the dataset size ({len(dataset)}). "
-                "When using subset_size, scale the splits down to match "
-                "(e.g. [800, 100, 100] for a 1000-molecule subset, or use "
-                "proportions like [0.8, 0.1, 0.1])."
-            )
 
         self.data_train = dataset[: split_idx[0]]
         self.data_val = dataset[split_idx[0] : split_idx[1]]

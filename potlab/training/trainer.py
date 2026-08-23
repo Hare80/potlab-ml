@@ -150,7 +150,7 @@ class Trainer:
                     self.logger.log_lr_step(global_step, self._current_lr())
 
             loss_epoch_mean = loss_epoch_sum / n_mols_epoch
-            val_mae = self._compute_mae(self.val_loader)  # physical units
+            val_mae = self.compute_mae(self.val_loader)  # physical units
             val_mae_display = self.data_module.unit_conversion(val_mae)
 
             metrics = {
@@ -192,12 +192,15 @@ class Trainer:
         print(f"Best val. MAE: {self.best_val_mae:.3f}")
         self._close()
 
-    def _compute_mae(self, loader: DataLoader) -> float:
+    def compute_mae(self, loader: DataLoader) -> float:
         """Sum-then-divide MAE in PHYSICAL units (display conversion is the caller's job).
 
-        Predictions leave the model in standardized space; inverse() maps
-        them back so the MAE compares physical energies - the baseline
-        number lives in this space.
+        One definition for every MAE this framework reports: the fit loop
+        calls it on the val loader each epoch, and the assembly's final
+        report (train.py) calls it on the test loader after loading
+        best.pt. Predictions leave the model in standardized space;
+        inverse() maps them back so the MAE compares physical energies -
+        the baseline number lives in this space.
         """
         self.model.eval()
         mae_sum = 0.0

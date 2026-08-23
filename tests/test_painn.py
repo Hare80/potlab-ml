@@ -1,19 +1,18 @@
-"""PaiNN model contract tests (M2): registration wiring + rotation invariance.
+"""PaiNN contract tests (M2+M4): registration, symmetries, gradients, scripting.
 
-Rotation invariance is the physical symmetry every geometric model must
-have: the energy of a rotated molecule is unchanged. The permanent M4
-suite will extend this file (force equivariance, gradient checks); what
-lands now is the M2 acceptance piece.
+M2 landed registration wiring + rotation invariance of the energy. M4
+added the rest of the permanent exam: force equivariance under rotation,
+the autograd-vs-finite-differences gradient check, and TorchScript-vs-
+eager parity on the core. Every future model must pass this file before
+being merged. torch_geometric is a hard project dependency, so it is
+imported normally - a broken environment fails loudly, never skips.
 """
 
 import importlib
 
-import pytest
 import torch
 
-torch_geometric = pytest.importorskip("torch_geometric")
-
-import potlab.models.painn.model  # noqa: E402 - side effect: registers "painn"
+import potlab.models.painn.model  # side effect: registers "painn"
 import potlab.registry as registry
 from potlab.models.painn.model import PaiNNModel
 
@@ -68,3 +67,85 @@ def test_energy_rotation_invariant():
     # The batch contract: one row per molecule.
     assert energy.shape == (2, 1)
     assert torch.allclose(energy, energy_rot, atol=1e-8)
+
+
+def test_forces_rotation_equivariant():
+    model = _small_model().double()  # float64, as in the invariance test
+    z = torch.tensor([1, 6, 8, 1, 6, 6, 8])
+    pos = torch.rand(7, 3, dtype=torch.float64)
+    graph_indexes = torch.tensor([0, 0, 0, 0, 1, 1, 1])
+
+    rotation = _random_rotation()
+    pos_rot = pos @ rotation.T
+
+    _, forces = model.energy_and_forces(z, pos, graph_indexes)
+    _, forces_rot = model.energy_and_forces(z, pos_rot, graph_indexes)
+
+    # Forces are vectors, so they transform like positions: the gradient
+    # w.r.t. pos' = pos @ R.T picks up a factor of R.T (chain rule, R
+    # orthogonal -> inverse transpose = R.T). f' = f @ R.T.
+    assert forces.shape == (7, 3)
+    assert torch.allclose(forces_rot, forces @ rotation.T, atol=1e-8)
+
+
+def test_autograd_forces_match_finite_differences():
+    # Central differences with eps=1e-6: in float64 the truncation error
+    # (~eps^2) sits far below the 1e-4 bound, so the bound really measures
+    # the autograd path. Note the forces here are the gradient of the
+    # MEAN-pooled per-molecule energies - the test locks autograd SELF-
+    # consistency, not physical forces (mean pooling rescales them by
+    # n_atoms; QM9 never uses forces, and the M6 force-bearing toy model
+    # will make its own pooling choice).
+    model = _small_model().double()
+    z = torch.tensor([1, 6, 8, 1, 6, 6, 8])
+    pos = torch.rand(7, 3, dtype=torch.float64)
+    graph_indexes = torch.tensor([0, 0, 0, 0, 1, 1, 1])
+
+    _, forces_auto = model.energy_and_forces(z, pos, graph_indexes)
+    forces_auto = forces_auto.detach()
+    # energy_and_forces sets requires_grad_ on pos in place; the FD loop
+    # below wants clean leaf tensors.
+    pos = pos.detach().clone()
+
+    eps = 1e-6
+    forces_fd = torch.zeros_like(forces_auto)
+    for i in range(pos.shape[0]):
+        for j in range(3):
+            pos_plus = pos.clone()
+            pos_plus[i, j] += eps
+            pos_minus = pos.clone()
+            pos_minus[i, j] -= eps
+            e_plus = model.energy(z, pos_plus, graph_indexes).sum()
+            e_minus = model.energy(z, pos_minus, graph_indexes).sum()
+            forces_fd[i, j] = -(e_plus - e_minus) / (2 * eps)
+
+    # Guard: if the random geometry were gradient-flat, the ratio below
+    # would be noise over ~0 - fail loudly instead of "passing" vacuously.
+    assert forces_auto.abs().max() > 1e-6
+    # Relative to the largest component: per-component division blows up
+    # on near-zero force components.
+    rel_error = (forces_fd - forces_auto).abs().max() / forces_fd.abs().max()
+    assert rel_error < 1e-4
+
+
+def test_scripted_core_matches_eager():
+    # The M2 smoke proved the core SCRIPTS; M4 pins what scripting must
+    # preserve: identical outputs. Same weights, same inputs, same math -
+    # torch.jit runs the same kernels, so atol=1e-6 on ~O(1) outputs is
+    # the checklist bound, and float32 suffices.
+    model = _small_model()
+    z = torch.tensor([1, 6, 8, 1, 6, 6, 8])
+    pos = torch.rand(7, 3)
+    graph_indexes = torch.tensor([0, 0, 0, 0, 1, 1, 1])
+
+    # The model's own graph build (loop=False: the core divides by
+    # rel_dist and forbids self-loops, so padded/synthetic edges must
+    # not be fed in).
+    idx_i, idx_j = model._radius_graph(pos, graph_indexes)
+
+    eager = model.painn_core(z, pos, idx_i, idx_j)
+    scripted = torch.jit.script(model.painn_core)
+    out = scripted(z, pos, idx_i, idx_j)
+
+    assert out.shape == eager.shape
+    assert torch.allclose(eager, out, atol=1e-6)

@@ -3,8 +3,8 @@
 M2 step 5 retired the old-project adapter: the model comes from
 MODELS["painn"] (registered by importing potlab.models.painn.model), and
 its mean-pooled output is the standardized-space prediction - the
-standardizer pairs with it unchanged (trainer loss uses transform, the
-Test MAE helper below uses inverse).
+standardizer pairs with it unchanged (trainer loss uses transform; the
+final Test MAE is Trainer.compute_mae, which converts back via inverse).
 
 Two ways to reuse previous work (mutually exclusive by semantics):
 
@@ -21,7 +21,6 @@ from pathlib import Path
 
 from lightning_fabric import seed_everything
 import torch
-import torch.nn.functional as F
 
 from potlab import ROOT
 import potlab.config as config
@@ -48,26 +47,6 @@ def build_parser():
     parser.add_argument("--subset-size", type=int, default=None,
                         help="Debug: cap the dataset to N molecules.")
     return parser
-
-
-def test_mae(model, standardizer, dataloader, device):
-    """Sum-then-divide MAE in PHYSICAL units (display conversion is the caller's job).
-
-    The model predicts in standardized space; inverse() maps back before
-    comparing to raw labels - the same math as Trainer._compute_mae, so
-    the Test MAE and val MAE share one definition.
-    """
-    model.eval()
-    mae_sum = 0.0
-    n_mols = 0
-    with torch.no_grad():
-        for batch in dataloader:
-            batch = batch.to(device)
-            preds = model.energy(batch.z, batch.pos, batch.batch)
-            preds = standardizer.inverse(preds, batch.z, batch.batch)
-            mae_sum += F.l1_loss(preds, batch.y, reduction="sum").item()
-            n_mols += len(batch.y)
-    return mae_sum / n_mols
 
 
 def main():
@@ -123,19 +102,23 @@ def main():
 
     # The Trainer speaks only the energy() protocol: data, logging,
     # optimizer/scheduler selection, checkpoints and resume are its job.
-    Trainer(
+    trainer = Trainer(
         model=model,
         data_module=dm,
         standardizer=standardizer,
         run_dir=run_dir,
         config=config_data,
         resume=args.resume,
-    ).fit()
+    )
+    trainer.fit()
 
     # Final test evaluation with the best checkpoint (baseline gate: MAE ~= 5.4 meV).
+    # Trainer.compute_mae is the one MAE definition the framework has -
+    # best.pt lands in the same model object the trainer holds, so the
+    # final report is literally the same math as every val MAE.
     checkpoint = torch.load(run_dir / "checkpoints" / "best.pt", map_location=device)
     model.load_state_dict(checkpoint["model"])
-    mae = test_mae(model, standardizer, dm.test_dataloader(), device)
+    mae = trainer.compute_mae(dm.test_dataloader())
     print(f"Test MAE: {dm.unit_conversion(mae):.3f}")
 
     return 0
