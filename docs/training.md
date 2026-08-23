@@ -88,8 +88,11 @@ Details:
 ## Checkpointing and resume
 
 A checkpoint contains: model `state_dict`, standardizer state, optimizer + scheduler state,
-config snapshot, `epoch`, `best_val_mae`. `--resume runs/<name>` restores all of it and
-continues from the same epoch — a kill mid-training must lose nothing.
+config snapshot, `epoch`, `best_val_mae`, and the optimizer/scheduler names (resume refuses
+a config that changed them — state_dicts are algorithm-specific). `--resume` is a flag: the
+run is identified by `run_name`, and the checkpoint is found in
+`runs/<name>/checkpoints/latest.pt`. Resume restores everything and continues from the same
+epoch — a kill mid-training must lose nothing.
 
 ## Test checklist (M4)
 

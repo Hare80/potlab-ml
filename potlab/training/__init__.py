@@ -1,4 +1,9 @@
-"""Training package: run directory management (the trainer itself lands in M2)."""
+"""Training package: run directories plus trainer/metrics/callbacks.
+
+The ``__init__`` stays light on purpose: importing ``potlab.training``
+must not drag matplotlib in. The trainer is imported by module path -
+``from potlab.training.trainer import Trainer``.
+"""
 
 from pathlib import Path
 

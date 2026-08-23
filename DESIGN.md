@@ -198,10 +198,12 @@ data:
 
 training:
   num_epochs: 1000
-  lr: 5.0e-4
-  weight_decay: 0.01
-  optimizer: adamw
-  scheduler: cosine                 # T_max = total steps
+  optimizer:
+    name: adamw                  # any class in torch.optim
+    lr: 5.0e-4
+    weight_decay: 0.01
+  scheduler:
+    name: cosine                 # any class in torch.optim.lr_scheduler
   loss:
     energy: 1.0
     forces: null                    # set e.g. 0.1 to engage the force term
