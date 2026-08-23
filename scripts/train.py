@@ -1,9 +1,10 @@
-"""M3 assembly: config -> data (registry) -> legacy model -> Trainer.
+"""Assembly: config -> data (registry) -> model (registry) -> Trainer.
 
-The old-project PaiNN + AtomwisePostProcessing are wrapped in a small
-adapter that speaks the Trainer's ``energy(z, pos, graph_indexes)``
-protocol. The adapter is temporary glue - M2 registers the real
-PaiNNModel in the registry and this file drops the old-project import.
+M2 step 5 retired the old-project adapter: the model comes from
+MODELS["painn"] (registered by importing potlab.models.painn.model), and
+its mean-pooled output is the standardized-space prediction - the
+standardizer pairs with it unchanged (trainer loss uses transform, the
+Test MAE helper below uses inverse).
 
 Two ways to reuse previous work (mutually exclusive by semantics):
 
@@ -16,60 +17,19 @@ Two ways to reuse previous work (mutually exclusive by semantics):
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 from lightning_fabric import seed_everything
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-
-# The old project is a sibling of the repo root: __file__ -> scripts/ ->
-# repo root -> Codes/ (three parents up). Anchoring to __file__ makes this
-# work regardless of the current working directory.
-sys.path.append(str(Path(__file__).resolve().parent.parent.parent / "02456_painn_project-main"))
 
 from potlab import ROOT
 import potlab.config as config
 import potlab.data.qm9  # side effect: registers "qm9" in DATASETS
+import potlab.models.painn.model  # side effect: registers "painn" in MODELS
 import potlab.registry as registry
 import potlab.training as training
 from potlab.training.trainer import Trainer
-from src.models import PaiNN, AtomwisePostProcessing  # type: ignore
-
-
-class LegacyPaiNNAdapter(nn.Module):
-    """Old PaiNN + post-processing under the Trainer's energy() protocol.
-
-    Only two members need writing: ``energy`` (the protocol) and
-    ``parameters`` (the optimizer must see painn's parameters only - the
-    post-processing's frozen atom_refs embedding is technically an
-    nn.Parameter, and M1 trained with AdamW(painn.parameters())). .to() /
-    .train() / .eval() / state_dict round-trips are inherited from
-    nn.Module, which recurses children, not this generator.
-    """
-
-    def __init__(self, painn, post_processing):
-        super().__init__()
-        self.painn = painn
-        self.post_processing = post_processing
-
-    def energy(self, z, pos, graph_indexes):
-        """Molecule energies in PHYSICAL units, [N_graphs, num_outputs]."""
-        atomic_contributions = self.painn(
-            atoms=z, atom_positions=pos, graph_indexes=graph_indexes
-        )
-        return self.post_processing(
-            atomic_contributions=atomic_contributions,
-            atoms=z,
-            graph_indexes=graph_indexes,
-        )
-
-    def parameters(self, recurse: bool = True):
-        # Excludes post_processing's frozen atom_refs Embedding weight from
-        # the optimizer (baseline parity with M1). .to() and state_dict()
-        # still cover it: they recurse children, not this generator.
-        return self.painn.parameters(recurse=recurse)
 
 
 def build_parser():
@@ -80,7 +40,7 @@ def build_parser():
     parser.add_argument("--config", type=str, default=str(ROOT / "configs" / "default.yaml"),
                         help="Path to the config file.")
     parser.add_argument("-o", "--override", action="append", default=[],
-                        help="Override config values using dotted paths, e.g., 'training.optimizer.lr=1e-3'.")
+                        help="Override config values using dotted paths, e.g., 'training.optimizer.lr=1.0e-3'.")
     parser.add_argument("--resume", action="store_true",
                         help="Resume the run named by run_name from checkpoints/latest.pt.")
     parser.add_argument("--warm-start", type=str, default=None,
@@ -90,8 +50,13 @@ def build_parser():
     return parser
 
 
-def test_mae(model, dataloader, device):
-    """Sum-then-divide MAE in PHYSICAL units (display conversion is the caller's job)."""
+def test_mae(model, standardizer, dataloader, device):
+    """Sum-then-divide MAE in PHYSICAL units (display conversion is the caller's job).
+
+    The model predicts in standardized space; inverse() maps back before
+    comparing to raw labels - the same math as Trainer._compute_mae, so
+    the Test MAE and val MAE share one definition.
+    """
     model.eval()
     mae_sum = 0.0
     n_mols = 0
@@ -99,6 +64,7 @@ def test_mae(model, dataloader, device):
         for batch in dataloader:
             batch = batch.to(device)
             preds = model.energy(batch.z, batch.pos, batch.batch)
+            preds = standardizer.inverse(preds, batch.z, batch.batch)
             mae_sum += F.l1_loss(preds, batch.y, reduction="sum").item()
             n_mols += len(batch.y)
     return mae_sum / n_mols
@@ -130,16 +96,13 @@ def main():
 
     standardizer = dm.make_standardizer()  # fitted on the train split only
 
-    # Model: the legacy old-project PaiNN (models do NOT go through the
-    # registry yet - MODELS stays empty until M2 registers PaiNNModel).
+    # Model via the registry (importing potlab.models.painn.model above
+    # performed the registration). The model mean-pools per molecule, so
+    # its output IS the standardized prediction - the standardizer works
+    # with it unchanged.
     model_cfg = dict(config_data.model)
-    model_cfg.pop("name")
-    painn = PaiNN(**model_cfg)
-    post_processing = AtomwisePostProcessing(
-        model_cfg["num_outputs"],
-        standardizer.mean, standardizer.std, standardizer.atom_refs,
-    )
-    model = LegacyPaiNNAdapter(painn, post_processing).to(device)
+    model_name = model_cfg.pop("name")
+    model = registry.MODELS[model_name](**model_cfg).to(device)
 
     if args.warm_start is not None:
         # Warm start: inherit the model's knowledge (weights + standardizer
@@ -172,7 +135,7 @@ def main():
     # Final test evaluation with the best checkpoint (baseline gate: MAE ~= 5.4 meV).
     checkpoint = torch.load(run_dir / "checkpoints" / "best.pt", map_location=device)
     model.load_state_dict(checkpoint["model"])
-    mae = test_mae(model, dm.test_dataloader(), device)
+    mae = test_mae(model, standardizer, dm.test_dataloader(), device)
     print(f"Test MAE: {dm.unit_conversion(mae):.3f}")
 
     return 0

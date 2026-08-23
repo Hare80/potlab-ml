@@ -3,8 +3,8 @@
 Smoke philosophy: these tests pin MECHANISMS, never numbers - which class
 the config selects, where T_max comes from, what resume restores. No data
 download, no GPU, no touching the real runs/ directory (every test uses
-tmp_path). scripts/train.py itself is not tested here: it needs the old
-project and a QM9 download, so it stays in the acceptance checklist.
+tmp_path). scripts/train.py itself is not tested here: it needs a QM9
+download, so it stays in the acceptance checklist.
 """
 
 from pathlib import Path
@@ -138,15 +138,22 @@ class ToyDataModule(BaseDataModule):
 
 
 class ToyStandardizer(Standardizer):
-    """Toy standardizer: only the two checkpoint methods are implemented.
+    """Toy standardizer: identity transform/inverse plus checkpoint methods.
 
-    The M3 trainer's loss lives in physical space, so fit/transform/inverse
-    are never called - but state_dict/load_state_dict go in and out of
-    every checkpoint.
+    The M2 trainer calls transform on every training batch and inverse on
+    every val batch, so both exist - as identities (the toy labels live in
+    no particular space, and identity is the honest choice). The state_dict
+    pair still goes in and out of every checkpoint.
     """
 
     def __init__(self, mean: float = 0.0):
         self.mean = torch.tensor(mean)
+
+    def transform(self, y, z, graph_indexes):
+        return y
+
+    def inverse(self, energy_pred, z, graph_indexes):
+        return energy_pred
 
     def state_dict(self):
         return {"mean": self.mean}

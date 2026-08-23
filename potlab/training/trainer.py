@@ -3,13 +3,16 @@
 A thin shell: run epochs over the train loader, build the metrics dict and
 call every callback at epoch end. The loop never grows feature flags -
 anything extra is a callback's job. The model is used only through the
-``energy(z, pos, graph_indexes)`` protocol, so M2 can swap the legacy
-adapter for the real PaiNNModel without touching this file.
+``energy(z, pos, graph_indexes)`` protocol, so the registry-backed
+PaiNNModel replaced the legacy adapter without touching this file.
 
-Loss space (M3 decision): the model outputs PHYSICAL energies and the loss
-compares them to raw labels - exactly the original pipeline, which is what
-preserves the M1 baseline (test MAE ~= 5.4 meV). Switching to standardized
-targets is decided when the real PaiNNModel lands in M2.
+Loss space (M2 step 5): the model outputs per-molecule MEAN contributions,
+i.e. standardized-space predictions. The loss compares them to
+``standardizer.transform(y)`` - ~N(0,1) targets are numerically friendly,
+and mean pooling removes the per-molecule size weighting that physical-
+space MSE carried (the (n_atoms * std)^2 factor per molecule). Val MAE
+converts predictions back through ``standardizer.inverse`` and stays in
+physical units - the baseline number (~5.4 meV) lives in that space.
 """
 
 import dataclasses
@@ -56,8 +59,10 @@ class Trainer:
     ) -> None:
         self.model = model
         self.data_module = data_module
-        self.standardizer = standardizer  # unused by M3's physical-space loss,
-        # but part of the checkpoint (resume must restore it)
+        # The loss targets live in standardized space (transform), and val
+        # MAE converts predictions back (inverse); the state_dict also goes
+        # into every checkpoint (resume must restore it).
+        self.standardizer = standardizer
         self.run_dir = run_dir
         self.config = config
         self.stop = False
@@ -120,9 +125,14 @@ class Trainer:
                 batch = batch.to(self.device)
 
                 preds = self.model.energy(batch.z, batch.pos, batch.batch)
+                # Standardized space (M2 step 5): the model mean-pools, so
+                # the loss target is transform(y), not the raw label.
+                standardized_y = self.standardizer.transform(
+                    batch.y, batch.z, batch.batch
+                )
                 # sum-then-divide: accumulate reduction='sum' losses, divide
                 # once by the total molecule count (batches differ in size).
-                loss_sum = F.mse_loss(preds, batch.y, reduction="sum")
+                loss_sum = F.mse_loss(preds, standardized_y, reduction="sum")
                 loss_mean = loss_sum / len(batch.y)
 
                 self.optimizer.zero_grad(set_to_none=True)  # frees grad memory; _grad_norm already skips None grads
@@ -183,7 +193,12 @@ class Trainer:
         self._close()
 
     def _compute_mae(self, loader: DataLoader) -> float:
-        """Sum-then-divide MAE in PHYSICAL units (display conversion is the caller's job)."""
+        """Sum-then-divide MAE in PHYSICAL units (display conversion is the caller's job).
+
+        Predictions leave the model in standardized space; inverse() maps
+        them back so the MAE compares physical energies - the baseline
+        number lives in this space.
+        """
         self.model.eval()
         mae_sum = 0.0
         n_mols = 0
@@ -191,6 +206,7 @@ class Trainer:
             for batch in loader:
                 batch = batch.to(self.device)
                 preds = self.model.energy(batch.z, batch.pos, batch.batch)
+                preds = self.standardizer.inverse(preds, batch.z, batch.batch)
                 mae_sum += F.l1_loss(preds, batch.y, reduction="sum").item()
                 n_mols += len(batch.y)
         return mae_sum / n_mols

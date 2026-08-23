@@ -27,7 +27,7 @@ class Config:
 
 
 def apply_overrides(raw: dict, overrides: list[str]) -> dict:
-    """Apply dotted-path overrides like ``training.optimizer.lr=1e-3`` onto the raw dict.
+    """Apply dotted-path overrides like ``training.optimizer.lr=1.0e-3`` onto the raw dict.
 
     Mutates ``raw`` in place: dicts are shared by reference, so the caller
     sees every change without needing the return value (kept for convenience).
