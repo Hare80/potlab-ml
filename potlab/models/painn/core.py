@@ -1,9 +1,9 @@
-"""PaiNN core: pure PyTorch, graph-agnostic, TorchScript-safe (PLAN.md M2).
+"""PaiNN core: pure PyTorch, graph-agnostic (PLAN.md M2).
 
 The core takes ``(z, pos, idx_i, idx_j)`` - edges come from OUTSIDE. That
-split exists for export: LAMMPS owns the neighbor list at inference time,
-so the exported artifact is the core only (no PyG, no Python control flow
-in ``forward``; every op here is a plain tensor op).
+split exists because LAMMPS owns the neighbor list at inference time
+(pair_style mliap feeds it into the Python plugin), so the inference
+entry point in LAMMPS is the core only - no PyG anywhere in it.
 
 Module layout mirrors the original ``src.models.PaiNN`` exactly
 (atom_embedding / cosine_cut / radial_basis / message_blocks /
@@ -82,7 +82,6 @@ class CosineCutoff(nn.Module):
         self.cutoff_dist = cutoff_dist
 
     def forward(self, distances: Tensor) -> Tensor:
-        # torch.pi, not math.pi: the forward must stay TorchScript-safe.
         return torch.where(
             distances < self.cutoff_dist,
             0.5 * (torch.cos(distances * torch.pi / self.cutoff_dist) + 1),
@@ -308,9 +307,8 @@ class PaiNNCore(nn.Module):
         rel_dist_cut = self.cosine_cut(rel_dist)  # [E] 0..1, fading with d
         rbf_features = self.radial_basis(rel_dist)  # [E, num_rbf_features]
 
-        # zip over two ModuleLists: enumeration is the TorchScript-safe way
-        # to iterate modules (indexing with a loop variable is NOT - the
-        # M2 script smoke caught that the other way around).
+        # zip over the two ModuleLists: each message block pairs with its
+        # own update block (round 1, round 2, ...).
         for message, update in zip(self.message_blocks, self.update_blocks):
             scalar_features, vector_features = message(
                 idx_i,

@@ -1,11 +1,11 @@
-"""PaiNN contract tests (M2+M4): registration, symmetries, gradients, scripting.
+"""PaiNN contract tests (M2+M4): registration, symmetries, gradients.
 
 M2 landed registration wiring + rotation invariance of the energy. M4
-added the rest of the permanent exam: force equivariance under rotation,
-the autograd-vs-finite-differences gradient check, and TorchScript-vs-
-eager parity on the core. Every future model must pass this file before
-being merged. torch_geometric is a hard project dependency, so it is
-imported normally - a broken environment fails loudly, never skips.
+added the rest of the permanent exam: force equivariance under rotation
+and the autograd-vs-finite-differences gradient check. Every future
+model must pass this file before being merged. torch_geometric is a hard
+project dependency, so it is imported normally - a broken environment
+fails loudly, never skips.
 """
 
 import importlib
@@ -126,26 +126,3 @@ def test_autograd_forces_match_finite_differences():
     # on near-zero force components.
     rel_error = (forces_fd - forces_auto).abs().max() / forces_fd.abs().max()
     assert rel_error < 1e-4
-
-
-def test_scripted_core_matches_eager():
-    # The M2 smoke proved the core SCRIPTS; M4 pins what scripting must
-    # preserve: identical outputs. Same weights, same inputs, same math -
-    # torch.jit runs the same kernels, so atol=1e-6 on ~O(1) outputs is
-    # the checklist bound, and float32 suffices.
-    model = _small_model()
-    z = torch.tensor([1, 6, 8, 1, 6, 6, 8])
-    pos = torch.rand(7, 3)
-    graph_indexes = torch.tensor([0, 0, 0, 0, 1, 1, 1])
-
-    # The model's own graph build (loop=False: the core divides by
-    # rel_dist and forbids self-loops, so padded/synthetic edges must
-    # not be fed in).
-    idx_i, idx_j = model._radius_graph(pos, graph_indexes)
-
-    eager = model.painn_core(z, pos, idx_i, idx_j)
-    scripted = torch.jit.script(model.painn_core)
-    out = scripted(z, pos, idx_i, idx_j)
-
-    assert out.shape == eager.shape
-    assert torch.allclose(eager, out, atol=1e-6)

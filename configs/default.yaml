@@ -35,5 +35,4 @@ training:
     min_epochs: 1000
 
 export:
-  out: model.pt
-  path: torchscript                # torchscript (primary) | mliap (generic)
+  path: mliap                      # LAMMPS integration: the Python plugin path

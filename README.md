@@ -12,8 +12,8 @@ PaiNN is the first supported model, but it is deliberately **one plugin among ma
 - **Pluggable datasets** — a single batch data contract; QM9 (molecular properties) and VASP trajectories (energies + forces, periodic) via ASE
 - **Training ergonomics** — checkpoints with resume, early stopping, YAML config, seeded reproducibility
 - **Visualization** — TensorBoard for live monitoring, CSV + matplotlib for report-ready figures
-- **Tests that matter** — rotation invariance, force equivariance, autograd-vs-finite-difference gradient checks, standardizer roundtrips, TorchScript parity
-- **LAMMPS export** — two documented paths: TorchScript + ML-PAINN (`pair_style painn`, primary, no Python in the MD loop) and MLIAP-Python (model-agnostic, no export step). See [docs/export.md](docs/export.md).
+- **Tests that matter** — rotation invariance, force equivariance, autograd-vs-finite-difference gradient checks, standardizer roundtrips
+- **LAMMPS integration** — MLIAP-Python (`pair_style mliap`): any `BaseModel` plugs in through a thin Python plugin, no export step. See [docs/export.md](docs/export.md).
 
 ## Layout (target)
 
@@ -23,14 +23,14 @@ potlab-ml/
 ├── scripts/
 │   ├── train.py              # train / resume from config
 │   ├── evaluate.py           # test-set MAE of a checkpoint
-│   └── export_lammps.py      # TorchScript export
+│   └── export_lammps.py      # MLIAP-Python plugin template
 ├── potlab/
 │   ├── config.py             # dataclass config + YAML loader
 │   ├── registry.py           # model + dataset registries
 │   ├── data/                 # BaseDataModule, transforms, QM9, (future) VASP
 │   ├── models/               # BaseModel + painn/ (core + adapter)
 │   ├── training/             # trainer, metrics logger, callbacks
-│   └── export/               # LAMMPS export (TorchScript primary, MLIAP alternative)
+│   └── export/               # LAMMPS integration (MLIAP-Python plugin)
 ├── tests/                    # pytest suite (see docs/training.md)
 └── runs/<run_name>/          # metrics.csv, plots/, checkpoints/, config.yaml
 ```
@@ -41,7 +41,7 @@ potlab-ml/
 conda env create -f environment.yml   # or reuse an existing torch + PyG env
 python scripts/train.py --config configs/default.yaml
 python scripts/evaluate.py --run runs/baseline
-python scripts/export_lammps.py --run runs/baseline --out model.pt
+python scripts/export_lammps.py --run runs/baseline
 tensorboard --logdir runs
 ```
 
@@ -51,7 +51,7 @@ tensorboard --logdir runs
 - [DESIGN.md](DESIGN.md) — interfaces, data contract, registries, config schema
 - [docs/data.md](docs/data.md) — QM9 and periodic VASP data handling
 - [docs/training.md](docs/training.md) — metrics, visualization, and the test checklist
-- [docs/export.md](docs/export.md) — TorchScript/ML-PAINN and MLIAP-Python export paths
+- [docs/export.md](docs/export.md) — the MLIAP-Python LAMMPS integration path
 
 ## Baseline to beat
 

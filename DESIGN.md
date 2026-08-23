@@ -120,7 +120,7 @@ its role and is data-specific by construction.
 ## 6. PaiNN: core / graph-builder split
 
 ```
-PaiNNCore(nn.Module)                      # TorchScript-safe, no PyG imports
+PaiNNCore(nn.Module)                      # graph-agnostic, no PyG imports
     forward(z, pos, idx_i, idx_j) -> atomic_contributions [N, out]
         # embedding -> (message block, update block) x3 -> readout
         # edge features computed internally from pos and the indices:
@@ -134,11 +134,11 @@ PaiNNModel(BaseModel)                     # training-time adapter
 
 Rationale and rules:
 
-- LAMMPS owns neighbor lists at inference time; the exported artifact is the core alone.
-  The core therefore takes edge indices as **inputs**.
+- LAMMPS owns neighbor lists at inference time (pair_style mliap feeds them into the
+  Python plugin); the inference entry point is the core alone. The core therefore takes
+  edge indices as **inputs**.
 - Core-only ops: tensor indexing, `index_add_`, `nn.Embedding`, `nn.Linear`,
-  `nn.ModuleList`, norms, `torch.where` — all TorchScript-safe. No PyG, no dict/object
-  plumbing, no Python-level branching on tensor values in `forward`.
+  `nn.ModuleList`, norms, `torch.where`. No PyG, no dict/object plumbing in `forward`.
 - `radius_graph` (and later ASE neighbor lists) lives only in the adapter — training-side
   code that is never exported. Pin the PyG version: graph-building backends differ between
   versions (see [docs/data.md](docs/data.md)).
@@ -212,8 +212,7 @@ training:
     min_epochs: 1000
 
 export:
-  out: model.pt
-  path: torchscript                # torchscript (primary) | mliap (generic)
+  path: mliap                      # LAMMPS integration: the Python plugin path
 ```
 
 Unknown keys in `model.*` / `data.*` are forwarded to the registered constructor — new models
@@ -233,14 +232,14 @@ potlab/
 ├── models/
 │   ├── base.py       # BaseModel
 │   └── painn/
-│       ├── core.py   # PaiNNCore (TorchScript-safe)
+│       ├── core.py   # PaiNNCore (graph-agnostic, no PyG)
 │       └── model.py  # PaiNNModel adapter (radius_graph)
 ├── training/
 │   ├── trainer.py
 │   ├── metrics.py
 │   └── callbacks.py
 └── export/
-    └── lammps.py     # bake standardizer -> torch.jit.save; MLIAP plugin template
+    └── lammps.py     # MLIAP-Python plugin template (bakes the standardizer)
 ```
 
 ## 10. What the model must never know about

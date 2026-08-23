@@ -1,9 +1,10 @@
 """PaiNN model: PyG graph builder + PaiNNCore (DESIGN.md §1 protocol).
 
 The graph builder (radius_graph) is the only place PyG appears in the
-model layer - and the reason PaiNNModel itself cannot be TorchScripted.
-Export (M5) targets PaiNNCore instead: LAMMPS owns the neighbor list at
-inference time, so the exported artifact must be the core only.
+model layer. LAMMPS owns the neighbor list at inference time (M5:
+pair_style mliap), so the LAMMPS-side entry point is PaiNNCore with
+edges supplied by the plugin - the model's own radius_graph is
+training-side only.
 """
 
 import torch
@@ -25,9 +26,6 @@ class PaiNNModel(BaseModel):
     mean) / std per molecule, so the standardizer pairs with this model
     unchanged (M2 step 5). Sum vs mean is each model's own choice - a
     model regressing total energies (MD17) would sum here.
-
-    NOT TorchScript-able: radius_graph is a PyG op, not plain tensor
-    math. The export path takes PaiNNCore, which is.
     """
 
     def __init__(

@@ -106,11 +106,9 @@ The permanent exam every model and dataset must pass before being merged:
    relative error < `1e-4`. Confirms the autograd path end to end.
 4. **Standardizer roundtrip** — `inverse(transform(y, z, batch), z, batch)` restores `y`
    to `1e-6`, including atom references.
-5. **TorchScript parity** — `torch.jit.script(core)` output matches eager mode to `1e-6`;
-   this test runs from M2 onward, not just at export time.
-6. **Data contract** — batch keys and shapes match [DESIGN.md](../DESIGN.md#3-data-contract-the-batch);
+5. **Data contract** — batch keys and shapes match [DESIGN.md](../DESIGN.md#3-data-contract-the-batch);
    split sizes sum to the dataset size (guards the silent-ignored-third-value bug).
-7. **Split discipline** — for trajectory datasets, train/val/test must not share simulation
+6. **Split discipline** — for trajectory datasets, train/val/test must not share simulation
    runs (see [docs/data.md](data.md)).
 
 ## Interpreting results (QM9 baseline)

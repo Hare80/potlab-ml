@@ -40,8 +40,9 @@ class Standardizer:
     def inverse(self, energy_pred: Tensor, z: Tensor, graph_indexes: Tensor) -> Tensor:
         """Model energies -> physical units (the exact reverse of transform).
 
-        The exported LAMMPS artifact calls this on model outputs, so this
-        direction is what users of the exported model see.
+        The LAMMPS plugin wrapper (M5: pair_style mliap) calls this on
+        model outputs - LAMMPS needs absolute energies, so this direction
+        is what LAMMPS sees.
         """
         raise NotImplementedError
 

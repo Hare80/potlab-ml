@@ -9,10 +9,12 @@ Interfaces referenced here are specified in [DESIGN.md](DESIGN.md).
 These three decisions are made up front and are not revisited later:
 
 1. **Core / graph-builder split.** Every geometric model is split into
-   - a **core** (pure PyTorch, no PyG, no Python control flow — TorchScript-safe) that takes `(z, pos, idx_i, idx_j)` and returns per-atom contributions, and
+   - a **core** (pure PyTorch, no PyG) that takes `(z, pos, idx_i, idx_j)` and returns per-atom contributions, and
    - a **graph-builder adapter** (PyG `radius_graph` or ASE neighbor lists) that produces the edge indices.
 
-   Rationale: LAMMPS owns the neighbor list at inference time; the exported artifact must be the core only. Keeping PyG out of the core is what makes export possible.
+   Rationale: LAMMPS owns the neighbor list at inference time (pair_style mliap feeds it into the Python plugin); the inference entry point is the core only. Keeping PyG out of the core is what makes that split possible.
+
+   (2026-08, M4): the original "TorchScript-safe" wording is dropped — `torch.jit.script` is deprecated upstream (torch ≥ 2.9), and the project abandoned the TorchScript export path. The split itself survives unchanged: MLIAP-Python needs the same graph-agnostic core.
 
 2. **Unified model protocol.** All models implement `BaseModel` ([DESIGN.md](DESIGN.md#basemodel-protocol)): `energy()`, `energy_and_forces()`, and optionally `atomic_contributions()`. Total energy is the interface common denominator — forces come from autograd for any differentiable model, and per-atom decomposition is an optional capability, not a requirement.
 
@@ -62,10 +64,9 @@ Inherited bugs to fix (from the original `minimal_example.py` / `qm9.py`):
 ### M2 — Model split (core + adapter)
 
 - Split PaiNN into `painn/core.py` (embeddings, message blocks, update blocks, readout — inputs `(z, pos, idx_i, idx_j)`, no PyG imports) and `painn/model.py` (a `BaseModel` that builds the graph with `radius_graph` and calls the core).
-- Run the **TorchScript smoke test here, not at M5**: `torch.jit.script(PaiNNCore)` must succeed before this milestone is done. If it fails, fix the core now.
 - Move the post-processing logic so the standardizer owns it (the model no longer knows about meV, atom refs, or standardization).
 
-**Acceptance:** `PaiNNCore` output matches the old monolithic model to `atol=1e-6` on the same inputs; `torch.jit.script` succeeds; energy is invariant under rotation of the molecule.
+**Acceptance:** `PaiNNCore` output matches the old monolithic model to `atol=1e-6` on the same inputs; energy is invariant under rotation of the molecule.
 
 ### M3 — Trainer (checkpoints, resume, visualization)
 
@@ -83,18 +84,18 @@ Implement the suite described in [docs/training.md](docs/training.md#test-checkl
 - rotation invariance of the energy; equivariance of forces under rotation
 - autograd forces vs finite differences (relative error < 1e-4)
 - standardizer roundtrip (transform → inverse restores original labels)
-- TorchScript-vs-eager parity on the core
 - split validation and dataset contract checks
 
 **Acceptance:** `pytest` is green. These tests are the permanent "exam" any future model must pass before being merged.
 
-### M5 — LAMMPS export (two paths)
+### M5 — LAMMPS integration (MLIAP-Python)
 
-- **Primary: TorchScript + ML-PAINN.** Bake the standardizer's inverse transform into the exported module (LAMMPS needs absolute energies, not standardized residuals). Export via `torch.jit.script` + `torch.jit.save`; verify scripted vs eager parity to 1e-6. Details in [docs/export.md](docs/export.md).
-- **Alternative: MLIAP-Python.** Document the plugin structure for running any `BaseModel` in `pair_style mliap` without an export step — the generic escape hatch for future models.
-- LAMMPS-side testing on Windows is awkward: use WSL2 or a Linux box. libtorch must match the torch version used for training (cu126 wheels → cu126 libtorch).
+- **The one path: MLIAP-Python.** Run any `BaseModel` in `pair_style mliap` via a small Python plugin on `PYTHONPATH` — no export artifact, no libtorch, no per-model pair style. The plugin wraps the trained model + standardizer: it calls `standardizer.inverse` (LAMMPS needs absolute energies, not standardized residuals) and feeds LAMMPS' own neighbor list to the core's `(z, pos, idx_i, idx_j)` interface. Details in [docs/export.md](docs/export.md).
+- LAMMPS-side testing on Windows is awkward: use WSL2 or a Linux box.
 
-**Acceptance:** `export_lammps.py` produces a `.pt` whose energies/forces match the eager model to 1e-6; (environment permitting) a short LAMMPS MD run of methane completes and matches Python-side energies.
+**Acceptance:** the mliap plugin wrapper reproduces the eager model's energies/forces to 1e-6; (environment permitting) a short LAMMPS MD run of methane completes and matches Python-side energies.
+
+TorchScript was dropped at M4 (`torch.jit.script` deprecated upstream); the MLIAP-Python path was always model-agnostic and now carries the whole export story.
 
 ### M6 — Extensibility proof
 
@@ -116,7 +117,7 @@ Note the swap: **trainer (M3) before model split (M2)**. Rationale: M1 leaves yo
 
 | Risk | Mitigation |
 |---|---|
-| TorchScript incompatibilities in the core | Split at M2 and run the `torch.jit.script` smoke test immediately; restrict the core to plain tensor ops (indexing, `index_add_`, `ModuleList`, `Embedding` are all scriptable) |
+| MLIAP-Python plugin not found by LAMMPS (PYTHONPATH / Python-enabled build) | Test the plugin early on WSL2/Linux with the conda env's Python; keep the plugin thin (BaseModel + standardizer.inverse only) |
 | Units baked incorrectly into the export | Export must go through the standardizer inverse; the parity check (M5) compares against the training-time pipeline, not the raw core |
 | PyG version drift (2.6.1 vs 2.8 `radius_graph` padding behavior differs) | Pin `torch-geometric` in `environment.yml`; the trainer only ever depends on the batch contract, never on graph-building internals |
 | MD-frame leakage in future periodic datasets | Split by trajectory/simulation run, never by shuffling frames (see [docs/data.md](docs/data.md)) |
