@@ -93,6 +93,11 @@ def test_inverse_per_atom_closed_form():
     z, graph_indexes, y = _make_batch()
     energy_pred = std.transform(y, z, graph_indexes)
 
-    contribs = energy_pred[graph_indexes]  # per-atom standardized contributions
-    expected = contribs * std.std + std.mean + std.atom_refs[z]
-    assert torch.allclose(std.inverse_per_atom(contribs, z), expected)
+    # Per-atom inputs, fabricated without a model: the pooled value
+    # broadcast to each atom (identical within a molecule) - NOT the
+    # core's real per-atom contributions, hence the honest name below.
+    # Degenerate but still exercises the full formula - refs[z] varies
+    # per element.
+    broadcast = energy_pred[graph_indexes]
+    expected = broadcast * std.std + std.mean + std.atom_refs[z]
+    assert torch.allclose(std.inverse_per_atom(broadcast, z), expected)

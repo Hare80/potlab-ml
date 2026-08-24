@@ -16,7 +16,7 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from potlab.data.qm9 import _validate_splits
+from potlab.data.qm9 import QM9DataModule, _validate_splits
 from potlab.data.transforms import GetTarget
 
 
@@ -53,6 +53,29 @@ def test_splits_float_proportions_resolved():
     # Proportions resolve against the dataset size; truncation is fine
     # (the test split takes the remainder at setup time).
     assert _validate_splits([0.8, 0.1, 0.1], n_mols=1000) == [800, 100, 100]
+
+
+# --- energy_index (M5 alignment): the dataset declares the PES-energy target ---
+
+def test_qm9_energy_index_for_pes_targets():
+    # Constructor-only knowledge, no data: U0 (target 7) is the one PES
+    # energy the project trains; the model's only column is the energy.
+    assert QM9DataModule(target=7).energy_index == 0
+
+
+def test_qm9_num_targets_is_one():
+    # GetTarget always slices one property column, so y is [N, 1] - the
+    # number the assembly checks against model.num_outputs.
+    assert QM9DataModule(target=7).num_targets == 1
+
+
+def test_qm9_energy_index_none_for_property_targets():
+    # Properties - and eV-quantities that are not PES energies - have no
+    # force-bearing column: dipole, HOMO, U (contains ZPE/thermochemistry).
+    # The U case is deliberate: "measured in eV" does not mean "energy".
+    assert QM9DataModule(target=0).energy_index is None  # dipole moment
+    assert QM9DataModule(target=2).energy_index is None  # HOMO
+    assert QM9DataModule(target=8).energy_index is None  # U at 298 K
 
 
 # --- batch contract (DESIGN.md §3): one label row per molecule ---

@@ -5,7 +5,7 @@ batch contract (z / pos / y / batch / forces) is specified in DESIGN.md §3;
 everything else about a dataset is private to its concrete implementation.
 """
 
-from typing import Callable
+from typing import Callable, Optional
 
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -105,6 +105,37 @@ class BaseDataModule:
     def has_forces(self) -> bool:
         """Whether the dataset provides forces - drives the loss composition."""
         raise NotImplementedError
+
+    @property
+    def num_targets(self) -> int:
+        """How many target columns the dataset yields (y is [N_graphs, num_targets]).
+
+        Every model output column is a target column: the assembly checks
+        model.num_outputs == num_targets and refuses the rest - an extra
+        output column would have no training signal, a missing one would
+        drop targets. QM9 is single-target; a future multi-target dataset
+        overrides this with len(targets).
+        """
+        raise NotImplementedError
+
+    @property
+    def energy_index(self) -> Optional[int]:
+        """Which output column is the energy, or None if the target is not one.
+
+        Energy means precisely: a conservative potential-energy-surface
+        quantity whose negative position gradient IS the interatomic
+        force. The dataset knows its target's semantics (QM9's U0 is a
+        PES energy; its HOMO, ZPVE or dipole moment are not - even when
+        measured in eV), so the knowledge lives here, next to has_forces
+        and unit_conversion. The model never decides it.
+
+        ``has_forces`` implies ``energy_index is not None`` (a dataset
+        with forces has an energy); the reverse does not hold (QM9 is
+        energies without force data). Consumers: energy_and_forces
+        differentiates column 0; the LAMMPS export refuses runs whose
+        energy_index is None.
+        """
+        return None
 
     @property
     def unit_conversion(self) -> Callable:

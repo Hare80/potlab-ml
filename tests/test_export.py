@@ -50,6 +50,15 @@ def _system():
     return z, pos, graph_indexes
 
 
+def _make_wrapper(model, standardizer, energy_index=0):
+    """A wrapper over the model's core, with an EXPLICIT energy column.
+
+    The real assembly passes dm.energy_index; the tests always spell the
+    value out so no test leans on the default.
+    """
+    return LammpsWrapper(model.painn_core, standardizer, energy_index=energy_index)
+
+
 def test_wrapper_energy_matches_training_pipeline():
     # Same weights, same statistics, two paths: the wrapper (per-atom
     # inverse, summed) vs the training pipeline (mean-pool + per-molecule
@@ -57,7 +66,7 @@ def test_wrapper_energy_matches_training_pipeline():
     # the math, not on float32 rounding.
     model = PaiNNModel(**_small_model_kwargs()).double()
     std = _make_standardizer()
-    wrapper = LammpsWrapper(model.painn_core, std)
+    wrapper = _make_wrapper(model, std)
     z, pos, graph_indexes = _system()
     idx_i, idx_j = model._radius_graph(pos, graph_indexes)
 
@@ -69,7 +78,7 @@ def test_wrapper_energy_matches_training_pipeline():
 
 def test_wrapper_forces_match_finite_differences():
     model = PaiNNModel(**_small_model_kwargs()).double()
-    wrapper = LammpsWrapper(model.painn_core, _make_standardizer())
+    wrapper = _make_wrapper(model, _make_standardizer())
     z, pos, graph_indexes = _system()
     idx_i, idx_j = model._radius_graph(pos, graph_indexes)
 
@@ -108,7 +117,7 @@ def test_wrapper_forces_are_physical_not_mean_pooled():
     # wrapper because inverse multiplies the pooled value back by n.
     model = PaiNNModel(**_small_model_kwargs()).double()
     std = _make_standardizer()
-    wrapper = LammpsWrapper(model.painn_core, std)
+    wrapper = _make_wrapper(model, std)
     z, pos, graph_indexes = _system()
     idx_i, idx_j = model._radius_graph(pos, graph_indexes)
 
@@ -124,5 +133,24 @@ def test_wrapper_core_is_shared_with_model():
     # assembly wires model.painn_core in) - sharing is what makes the
     # parity tests above meaningful, not two separately-trained copies.
     model = PaiNNModel(**_small_model_kwargs())
-    wrapper = LammpsWrapper(model.painn_core, _make_standardizer())
+    wrapper = _make_wrapper(model, _make_standardizer())
     assert wrapper.core is model.painn_core
+
+
+def test_wrapper_energy_index_selects_the_column():
+    # The wrapper's column choice is driven by the energy_index argument
+    # (the export assembly fills it from dm.energy_index) - not by a
+    # hardcoded 0. A 2-output core wrapped with energy_index=1 must sum
+    # column 1's physical values.
+    kwargs = _small_model_kwargs()
+    kwargs["num_outputs"] = 2
+    model = PaiNNModel(**kwargs).double()
+    std = _make_standardizer()
+    wrapper = _make_wrapper(model, std, energy_index=1)
+    z, pos, graph_indexes = _system()
+    idx_i, idx_j = model._radius_graph(pos, graph_indexes)
+
+    contribs = model.painn_core(z, pos, idx_i, idx_j)
+    expected = std.inverse_per_atom(contribs, z)[:, 1].sum()
+
+    assert torch.allclose(wrapper.energy(z, pos, idx_i, idx_j), expected, atol=1e-8)

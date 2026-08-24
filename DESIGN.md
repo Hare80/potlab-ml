@@ -25,6 +25,15 @@ Rules:
   ever call `energy` (and `energy_and_forces` when the dataset has forces). Per-atom
   contributions are an optional capability (diagnostics, decomposition plots), never a
   requirement — a model that regresses the total energy directly is a first-class citizen.
+  *Energy* means precisely a conservative potential-energy-surface quantity whose negative
+  position gradient IS the interatomic force (QM9's U0; not its HOMO, ZPVE or dipole).
+- **Column 0 is the energy.** Multi-output models may carry other properties in the
+  remaining columns; `energy_and_forces` differentiates column 0 only. Whether the target
+  is an energy at all is the dataset's knowledge (`BaseDataModule.energy_index`), never
+  the model's.
+- **Outputs and targets align 1:1.** Models expose `num_outputs`; the dataset declares
+  `num_targets`. The assembly checks equality and refuses the rest — an extra output
+  column has no training signal, a missing one drops targets.
 - **Forces come from autograd**, for any differentiable model: `-torch.autograd.grad(E.sum(), pos)`.
   The model's output granularity is irrelevant to this. (`create_graph=True` when the force
   loss itself must be differentiated.)
@@ -81,6 +90,10 @@ class BaseDataModule:
     def make_standardizer(self) -> Standardizer: ...
     @property
     def has_forces(self) -> bool: ...          # drives loss composition
+    @property
+    def num_targets(self) -> int: ...          # how many target columns y carries
+    @property
+    def energy_index(self) -> Optional[int]: ...  # which output column is the energy (None = not one)
     @property
     def unit_conversion(self) -> Callable: ... # display only (eV -> meV etc.)
 ```

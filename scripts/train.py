@@ -83,6 +83,18 @@ def main():
     model_name = model_cfg.pop("name")
     model = registry.MODELS[model_name](**model_cfg).to(device)
 
+    # Every model output column is a target column: refuse a mismatch at
+    # assembly, not deep inside epoch 0's broadcast (the trainer carries
+    # its own shape assertion as defense in depth for other assembly
+    # paths).
+    if model.num_outputs != dm.num_targets:
+        raise ValueError(
+            f"model.num_outputs ({model.num_outputs}) must match the "
+            f"dataset's num_targets ({dm.num_targets}): every output "
+            "column is a target column (check model.num_outputs and "
+            "data.target in the config)."
+        )
+
     if args.warm_start is not None:
         # Warm start: inherit the model's knowledge (weights + standardizer
         # statistics) from an old checkpoint, but start a NEW run - fresh

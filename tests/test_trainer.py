@@ -95,11 +95,12 @@ class ToyModel(nn.Module):
     trainer's optimizer/checkpoint machinery has real state to work with.
     """
 
-    def __init__(self, num_features: int = 8):
+    def __init__(self, num_features: int = 8, num_outputs: int = 1):
         super().__init__()
+        self.num_outputs = num_outputs  # the M4-alignment contract
         self.embedding = nn.Embedding(100, num_features)  # z -> scalar features
         self.pos_linear = nn.Linear(3, num_features)      # coordinates -> features
-        self.out_linear = nn.Linear(2 * num_features, 1)  # features -> contribution
+        self.out_linear = nn.Linear(2 * num_features, num_outputs)  # features -> contributions
 
     def energy(self, z, pos, graph_indexes):
         z_features = self.embedding(z)
@@ -107,7 +108,7 @@ class ToyModel(nn.Module):
         per_atom = self.out_linear(torch.cat([z_features, pos_features], dim=1))
         n_graphs = int(graph_indexes.max().item()) + 1
         out = torch.zeros(
-            n_graphs, 1, device=per_atom.device, dtype=per_atom.dtype
+            n_graphs, self.num_outputs, device=per_atom.device, dtype=per_atom.dtype
         )
         out.index_add_(dim=0, index=graph_indexes, source=per_atom)
         return out
@@ -341,3 +342,19 @@ def test_fit_writes_complete_run_layout(tmp_path):
         rows = list(csv.reader(f))
     assert rows[0] == list(METRICS_HEADER)
     assert len(rows) == 2  # header + epoch 0
+
+
+def test_fit_rejects_output_target_shape_mismatch(tmp_path):
+    # The trainer's own guard (defense in depth behind train.py's
+    # assembly check): a model whose output shape differs from the target
+    # shape must fail with the self-diagnosing message, never a torch
+    # broadcast error deep in the loss.
+    trainer = Trainer(
+        model=ToyModel(num_outputs=2),  # toy targets are [N, 1]
+        data_module=ToyDataModule(),
+        standardizer=ToyStandardizer(),
+        run_dir=make_run_dir("test_run", root=tmp_path),
+        config=_make_config(num_epochs=1),
+    )
+    with pytest.raises(ValueError, match="num_outputs"):
+        trainer.fit()

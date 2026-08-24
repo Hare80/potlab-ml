@@ -130,6 +130,17 @@ class Trainer:
                 standardized_y = self.standardizer.transform(
                     batch.y, batch.z, batch.batch
                 )
+                # Defense in depth behind train.py's assembly check: any
+                # other assembly path (tests, future scripts) still gets a
+                # self-diagnosing error instead of a torch broadcast
+                # failure deep in the loss.
+                if preds.shape != standardized_y.shape:
+                    raise ValueError(
+                        f"Model output shape {tuple(preds.shape)} does not "
+                        f"match target shape {tuple(standardized_y.shape)}: "
+                        "model.num_outputs must equal the dataset's "
+                        "num_targets."
+                    )
                 # sum-then-divide: accumulate reduction='sum' losses, divide
                 # once by the total molecule count (batches differ in size).
                 loss_sum = F.mse_loss(preds, standardized_y, reduction="sum")

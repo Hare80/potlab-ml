@@ -34,18 +34,35 @@ class LammpsWrapper(nn.Module):
     The standardizer is a plain attribute, not a module: its statistics
     travel with the training checkpoint (ckpt["standardizer"]) and it
     moves them to the caller's device itself (Qm9Standardizer._stats_on).
+
+    ``energy_index`` selects the energy column of the core's output; the
+    default 0 restates the BaseModel convention, but the export assembly
+    always passes the dataset's declared value (dm.energy_index), so no
+    literal column number survives in the math.
     """
 
-    def __init__(self, core: nn.Module, standardizer: Standardizer) -> None:
+    def __init__(
+        self,
+        core: nn.Module,
+        standardizer: Standardizer,
+        energy_index: int = 0,
+    ) -> None:
         super().__init__()
         self.core = core
         self.standardizer = standardizer
+        self.energy_index = energy_index
 
     def energy(self, z: Tensor, pos: Tensor, idx_i: Tensor, idx_j: Tensor) -> Tensor:
-        """Scalar total energy (0-dim). Column 0 of a multi-output core is the energy column."""
+        """Scalar total energy (0-dim).
+
+        The summed column is ``self.energy_index`` (the BaseModel
+        convention is column 0; the export assembly passes the dataset's
+        declared value, and refuses runs whose target is not a PES
+        energy).
+        """
         contribs = self.core(z, pos, idx_i, idx_j)  # [N_atoms, num_outputs]
         e_per_atom = self.standardizer.inverse_per_atom(contribs, z)  # absolute, per atom
-        return e_per_atom[:, 0].sum()  # LAMMPS wants ONE number
+        return e_per_atom[:, self.energy_index].sum()  # LAMMPS wants ONE number
 
     def forces(self, z: Tensor, pos: Tensor, idx_i: Tensor, idx_j: Tensor) -> Tensor:
         """Per-atom forces [N_atoms, 3]: -d(total energy)/dpos.

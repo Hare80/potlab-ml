@@ -24,6 +24,16 @@ from potlab.registry import register_dataset
 # their native units are kept for display instead of converting eV -> meV.
 NO_UNIT_CONVERSION = {0, 1, 5, 11, 16, 17, 18}
 
+# QM9 targets that are POTENTIAL-ENERGY-SURFACE energies: conservative
+# quantities whose negative position gradient IS the interatomic force.
+# Only U0 (7) qualifies today. Deliberately excluded: U/H/G (contain
+# ZPE + thermochemistry - nuclear-motion contributions, not electronic
+# forces), ZPVE itself, HOMO/LUMO/gap (orbital energies - their gradient
+# is a property gradient, not a force), and the non-energy properties.
+# Note U0_atom (12) differs from U0 by a constant and would have the
+# same gradient - add it here when a run actually trains it.
+PES_ENERGY_TARGETS = {7}
+
 
 def _num_atoms_per_graph(graph_indexes: Tensor) -> Tensor:
     """Atom count per molecule, [N_graphs, 1]. Batch indices are contiguous 0..N-1."""
@@ -261,6 +271,17 @@ class QM9DataModule(BaseDataModule):
     @property
     def has_forces(self) -> bool:
         return False  # QM9 ships energies/properties, no forces
+
+    @property
+    def num_targets(self) -> int:
+        return 1  # GetTarget always slices ONE property column
+
+    @property
+    def energy_index(self) -> Optional[int]:
+        # Single-target QM9: the model's only output column holds the
+        # target. It IS the energy only for PES targets (see the module
+        # comment on PES_ENERGY_TARGETS).
+        return 0 if self.target in PES_ENERGY_TARGETS else None
 
     @property
     def unit_conversion(self) -> Callable:

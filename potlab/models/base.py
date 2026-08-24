@@ -16,7 +16,15 @@ class BaseModel(nn.Module):
     """
 
     def energy(self, z: Tensor, pos: Tensor, graph_indexes: Tensor) -> Tensor:
-        """Per-molecule property. [N_atoms]/[N_atoms,3]/[N_atoms] -> [N_graphs, num_outputs]."""
+        """Per-molecule property. [N_atoms]/[N_atoms,3]/[N_atoms] -> [N_graphs, num_outputs].
+
+        Protocol convention: column 0 is the ENERGY when the dataset
+        targets one (a conservative PES quantity, see
+        BaseDataModule.energy_index); a multi-output model carries other
+        properties in the remaining columns. Whether the target is an
+        energy at all is the data layer's knowledge - the model is a
+        target-agnostic pure function and never decides it.
+        """
         raise NotImplementedError
 
     def energy_and_forces(
@@ -30,12 +38,19 @@ class BaseModel(nn.Module):
         only), so the batch sum computes every molecule's forces exactly as
         a per-molecule loop would - no cross-molecule mixing.
 
+        Only column 0 (the energy) is differentiated: a multi-output
+        model's other columns are properties, and the gradient of their
+        sum is not a force. For num_outputs == 1 this is numerically
+        identical to the old energy.sum(). Precondition: the dataset
+        targets an energy (energy_index is not None) - the model cannot
+        know, so the callers are gated by the data layer.
+
         ``create_graph=True`` keeps the force graph alive: a force loss
         must itself be differentiable.
         """
         pos = pos.requires_grad_(True)
         energy = self.energy(z, pos, graph_indexes)
-        forces = -torch.autograd.grad(energy.sum(), pos, create_graph=True)[0]
+        forces = -torch.autograd.grad(energy[:, 0].sum(), pos, create_graph=True)[0]
         return energy, forces
 
     def atomic_contributions(

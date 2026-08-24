@@ -62,14 +62,29 @@ def main():
     model.load_state_dict(checkpoint["model"])
     model.to(device).double().eval()
 
-    standardizer = Qm9Standardizer()
-    standardizer.load_state_dict(checkpoint["standardizer"])
-    wrapper = LammpsWrapper(model.painn_core, standardizer)
-
-    # One val batch from the run's own config is enough for the check.
+    # The data module declares the target's semantics: which column is
+    # the energy, or that there is none. A model trained on a property
+    # (dipole, HOMO, ZPVE, ...) has nothing to export - fail before
+    # touching any data.
     data_cfg = dict(config_data.data)
     data_name = data_cfg.pop("name")
     dm = registry.DATASETS[data_name](**data_cfg, seed=config_data.seed)
+    if dm.energy_index is None:
+        raise ValueError(
+            f"Run {args.run!r} trains a non-energy target "
+            f"(data.target={data_cfg.get('target')}): LAMMPS integrates "
+            "forces, so only PES-energy targets can be exported."
+        )
+
+    standardizer = Qm9Standardizer()
+    standardizer.load_state_dict(checkpoint["standardizer"])
+    # The dataset's declared energy column flows into the wrapper - no
+    # column number is guessed here.
+    wrapper = LammpsWrapper(
+        model.painn_core, standardizer, energy_index=dm.energy_index
+    )
+
+    # One val batch from the run's own config is enough for the check.
     dm.prepare_data()
     dm.setup()
     batch = next(iter(dm.val_dataloader())).to(device)
