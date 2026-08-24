@@ -6,13 +6,10 @@ on hand-crafted tensors only - no dataset download, no GPU. fit() itself
 is exercised end-to-end by the M1 acceptance run (MAE vs the baseline).
 """
 
-import pytest
 import torch
 
-# qm9.py imports torch_geometric at module level; skip cleanly when it is
-# not installed instead of failing collection.
-pytest.importorskip("torch_geometric")
-
+# torch_geometric is a hard project dependency (qm9.py imports it at
+# module level) - a broken environment must fail loudly, never skip.
 from potlab.data.qm9 import Qm9Standardizer
 
 
@@ -71,3 +68,31 @@ def test_state_dict_roundtrip():
     assert torch.allclose(restored.mean, std.mean)
     assert torch.allclose(restored.std, std.std)
     assert torch.allclose(restored.atom_refs, std.atom_refs)
+
+
+def test_inverse_is_per_atom_aggregation():
+    """inverse == broadcast pooled value -> inverse_per_atom -> per-graph sum.
+
+    The M5 refactor contract: inverse_per_atom is the base primitive and
+    inverse composes it (the export path and the training path must be
+    the SAME math at two granularities).
+    """
+    std = _make_standardizer()
+    z, graph_indexes, y = _make_batch()
+    energy_pred = std.transform(y, z, graph_indexes)  # per-molecule standardized
+
+    per_atom = std.inverse_per_atom(energy_pred[graph_indexes], z)
+    out = torch.zeros(energy_pred.shape[0], 1)
+    out.index_add_(dim=0, index=graph_indexes, source=per_atom)
+    assert torch.allclose(out, std.inverse(energy_pred, z, graph_indexes))
+
+
+def test_inverse_per_atom_closed_form():
+    """inverse_per_atom is the documented unstandardization: c*std + mean + refs[z]."""
+    std = _make_standardizer()
+    z, graph_indexes, y = _make_batch()
+    energy_pred = std.transform(y, z, graph_indexes)
+
+    contribs = energy_pred[graph_indexes]  # per-atom standardized contributions
+    expected = contribs * std.std + std.mean + std.atom_refs[z]
+    assert torch.allclose(std.inverse_per_atom(contribs, z), expected)

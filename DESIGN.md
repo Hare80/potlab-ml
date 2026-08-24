@@ -98,6 +98,7 @@ class Standardizer:
     def fit(self, train_data) -> None: ...
     def transform(self, y, z, graph_indexes) -> Tensor: ...     # labels -> standardized space
     def inverse(self, energy_pred, z, graph_indexes) -> Tensor: # model energies -> physical units
+    def inverse_per_atom(self, contribs, z) -> Tensor:          # per-atom standardized -> per-atom physical
     def state_dict(self) / def load_state_dict(self, ...): ...  # saved with checkpoints
 ```
 
@@ -114,8 +115,14 @@ The canonical pipeline (three steps, mirrored by `inverse`):
    (no validation/test statistics — that would leak).
 
 The network therefore always trains on small, zero-centered targets regardless of dataset.
-`AtomwisePostProcessing` from the original project disappears — `Standardizer.inverse` plays
-its role and is data-specific by construction.
+`AtomwisePostProcessing` from the original project disappears — `Standardizer.inverse` /
+`inverse_per_atom` play its role and are data-specific by construction.
+
+**Two granularities, one implementation.** `inverse` is the per-molecule aggregation of
+`inverse_per_atom` (broadcast the pooled value to its atoms, apply the per-atom transform,
+sum per graph). The LAMMPS mliap wrapper (M5) calls `inverse_per_atom` directly: LAMMPS has
+per-atom outputs and no molecule boundaries, so the export path needs the per-atom
+granularity — and its sum is algebraically the same total the training pipeline predicts.
 
 ## 6. PaiNN: core / graph-builder split
 

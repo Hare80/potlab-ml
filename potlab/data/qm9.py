@@ -123,13 +123,26 @@ class Qm9Standardizer(Standardizer):
         per_atom = (y - refs) / _num_atoms_per_graph(graph_indexes)
         return (per_atom - mean) / std
 
+    def inverse_per_atom(self, contribs: Tensor, z: Tensor) -> Tensor:
+        """Per-atom standardized contributions -> per-atom physical energies.
+
+        ``c_i * std + mean + refs[z_i]``: unstandardize, then add the
+        atom's element reference. The base of the per-molecule ``inverse``
+        (M5: the LAMMPS mliap wrapper calls this directly - LAMMPS has
+        per-atom outputs and no molecule boundaries).
+        """
+        mean, std, atom_refs = self._stats_on(contribs.device)
+        return contribs * std + mean + atom_refs[z]
+
     def inverse(self, energy_pred: Tensor, z: Tensor, graph_indexes: Tensor) -> Tensor:
-        """Model energies -> physical units: (E * std + mean) * n_atoms + refs."""
-        mean, std, atom_refs = self._stats_on(energy_pred.device)
-        n_graphs = energy_pred.shape[0]
-        per_atom = energy_pred * std + mean
-        unscaled = per_atom * _num_atoms_per_graph(graph_indexes)
-        return unscaled + _sum_per_graph(atom_refs[z], graph_indexes, n_graphs)
+        """Model energies -> physical units: inverse_per_atom, aggregated per molecule.
+
+        Each molecule's pooled value is broadcast to its atoms, transformed
+        per atom, and summed per graph. The algebra: n_atoms * (E * std +
+        mean) + refs - exactly the inverse of transform.
+        """
+        per_atom = self.inverse_per_atom(energy_pred[graph_indexes], z)
+        return _sum_per_graph(per_atom, graph_indexes, energy_pred.shape[0])
 
     def state_dict(self) -> dict:
         """Statistics needed to reproduce transform/inverse - saved with checkpoints."""

@@ -40,9 +40,19 @@ class Standardizer:
     def inverse(self, energy_pred: Tensor, z: Tensor, graph_indexes: Tensor) -> Tensor:
         """Model energies -> physical units (the exact reverse of transform).
 
-        The LAMMPS plugin wrapper (M5: pair_style mliap) calls this on
-        model outputs - LAMMPS needs absolute energies, so this direction
-        is what LAMMPS sees.
+        The per-molecule aggregation of ``inverse_per_atom``: broadcast
+        each molecule's pooled value to its atoms, apply the per-atom
+        transform, sum per molecule. One implementation, two granularities.
+        """
+        raise NotImplementedError
+
+    def inverse_per_atom(self, contribs: Tensor, z: Tensor) -> Tensor:
+        """Per-atom standardized contributions -> per-atom physical energies.
+
+        The granularity the export path needs: LAMMPS' mliap plugin works
+        per atom and has no molecule boundaries (no graph_indexes), so the
+        M5 wrapper calls this method directly - LAMMPS gets per-atom
+        absolute energies, and their sum is the total energy.
         """
         raise NotImplementedError
 
