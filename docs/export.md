@@ -43,16 +43,22 @@ Forces: `-torch.autograd.grad(E, pos)` — the same math as
 
 ## Plugin structure
 
-A small file on `PYTHONPATH` following the MLIAP-Python conventions: model loading,
-unit and energy-convention declarations. The template lives in
-`potlab/export/lammps.py` (M5) next to the standardizer-baking code it shares with
-training.
+The unified model lives in `potlab/export/mliappy.py` (`MliapPaiNN`): the pickle
+loaded by `pair_style mliap unified <file> 0`. `scripts/make_mliap_pickle.py`
+builds it from a trained run; `examples/lammps/methane/` is the turnkey smoke
+(data + input + runbook). The wrapper math stays in `potlab/export/lammps.py` -
+the glue only translates the coupling's data object (element indices, pair
+displacements) into the wrapper's interface and writes energy/forces back.
 
 ## Verification
 
 The wrapper's energies/forces must match the eager training pipeline (standardizer
 included) to `1e-6` — the same definition as `Trainer.compute_mae`, so a wrapper
-that disagrees with the validation MAE fails this check.
+that disagrees with the validation MAE fails this check. Achieved end to end in
+M5: `tests/test_export.py` pins the wrapper/glue math (42-test suite), and the
+methane smoke ran a 100-step NVE MD whose step-0 `pe` matches the Python-side
+wrapper energy to float32 precision (1.6e-5 eV on -1103 eV), with `etotal`
+conserved across the run.
 
 ## LAMMPS side
 

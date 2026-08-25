@@ -288,24 +288,69 @@ class PaiNNCore(nn.Module):
             activation=nn.SiLU,
         )
 
+    def _edge_geometry(
+        self, rel_pos: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """(unit direction, cosine-cutoff weight, RBF features) per edge.
+
+        Everything the message blocks need about the edges, computed once
+        (geometry does not change between rounds). Split out of ``forward``
+        so the LAMMPS mliappy glue (M5) can feed LAMMPS' own neighbor list:
+        the unified coupling hands out displacements rij = x[j] - x[i]
+        directly (already minimum-image corrected), not absolute
+        positions - so the geometry step takes displacements.
+        """
+        rel_dist = torch.linalg.vector_norm(rel_pos, dim=1)  # [E]
+        rel_dir = rel_pos / rel_dist.unsqueeze(-1)  # [E, 3] unit vectors
+        rel_dist_cut = self.cosine_cut(rel_dist)  # [E] 0..1, fading with d
+        rbf_features = self.radial_basis(rel_dist)  # [E, num_rbf_features]
+        return rel_dir, rel_dist_cut, rbf_features
+
     def forward(
         self, z: Tensor, pos: Tensor, idx_i: Tensor, idx_j: Tensor
     ) -> Tensor:
         """Per-atom contributions, [N_atoms, num_outputs]."""
+        rel_pos = pos[idx_j] - pos[idx_i]  # [E, 3]
+        return self.forward_with_edges(z, rel_pos, idx_i, idx_j)
+
+    def forward_with_edges(
+        self, z: Tensor, rel_pos: Tensor, idx_i: Tensor, idx_j: Tensor
+    ) -> Tensor:
+        """Per-atom contributions when the edge geometry comes from outside.
+
+        Same math as ``forward``, but the caller supplies the per-edge
+        displacement vectors (x[j] - x[i]) directly instead of positions.
+        The LAMMPS mliappy glue (M5) is the consumer: LAMMPS' neighbor
+        list already carries minimum-image-corrected displacements and no
+        absolute coordinates, so this entry is the inference interface
+        pair_style mliap unified drives.
+        """
+        rel_dir, rel_dist_cut, rbf_features = self._edge_geometry(rel_pos)
+        return self._message_pass(
+            z, idx_i, idx_j, rel_dir, rel_dist_cut, rbf_features
+        )
+
+    def _message_pass(
+        self,
+        z: Tensor,
+        idx_i: Tensor,
+        idx_j: Tensor,
+        rel_dir: Tensor,
+        rel_dist_cut: Tensor,
+        rbf_features: Tensor,
+    ) -> Tensor:
+        """Embeddings through the (message, update) rounds to the readout.
+
+        The geometry-free half of the forward pass - the same math whether
+        the edge geometry came from positions (``forward``) or from the
+        LAMMPS neighbor list (the M5 glue).
+        """
         scalar_features = self.atom_embedding(z)  # [N, F]
         vector_features = torch.zeros(  # [N, F, 3]: starts empty, polarization
             scalar_features.size() + (3,),  # accumulates through the rounds
             dtype=scalar_features.dtype,
             device=scalar_features.device,
         )
-
-        # Edge geometry, computed once and shared by all rounds (geometry
-        # does not change between rounds).
-        rel_pos = pos[idx_j] - pos[idx_i]  # [E, 3]
-        rel_dist = torch.linalg.vector_norm(rel_pos, dim=1)  # [E]
-        rel_dir = rel_pos / rel_dist.unsqueeze(-1)  # [E, 3] unit vectors
-        rel_dist_cut = self.cosine_cut(rel_dist)  # [E] 0..1, fading with d
-        rbf_features = self.radial_basis(rel_dist)  # [E, num_rbf_features]
 
         # zip over the two ModuleLists: each message block pairs with its
         # own update block (round 1, round 2, ...).

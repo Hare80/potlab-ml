@@ -1,0 +1,22 @@
+LAMMPS data file for methane (C at the box center, tetrahedral H)
+
+5 atoms
+
+2 atom types
+
+0.0 10.0 xlo xhi
+0.0 10.0 ylo yhi
+0.0 10.0 zlo zhi
+
+Masses
+
+1 12.011
+2 1.008
+
+Atoms # atomic
+
+1 1 5.000 5.000 5.000
+2 2 5.628 5.628 5.628
+3 2 5.628 4.372 4.372
+4 2 4.372 5.628 4.372
+5 2 4.372 4.372 5.628

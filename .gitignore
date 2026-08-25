@@ -45,3 +45,6 @@ $RECYCLE.BIN/
 
 # ---- LAMMPS artifacts ----
 log.lammps
+
+# ---- mliappy model pickles (generated artifacts) ----
+*.pkl

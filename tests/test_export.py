@@ -8,10 +8,12 @@ following the suite's zero-data philosophy. The M5 acceptance's 1e-6
 parity is exactly test_wrapper_energy_matches_training_pipeline below.
 """
 
+import numpy as np
 import torch
 
 from potlab.data.qm9 import Qm9Standardizer
 from potlab.export.lammps import LammpsWrapper
+from potlab.export.mliappy import MliapPaiNN
 from potlab.models.painn.core import PaiNNCore
 from potlab.models.painn.model import PaiNNModel
 
@@ -154,3 +156,104 @@ def test_wrapper_energy_index_selects_the_column():
     expected = std.inverse_per_atom(contribs, z)[:, 1].sum()
 
     assert torch.allclose(wrapper.energy(z, pos, idx_i, idx_j), expected, atol=1e-8)
+
+
+# --- M5 Phase B: the mliappy glue against a numpy stand-in of the data object ---
+
+class FakeUnifiedData:
+    """The unified data object's contract in miniature.
+
+    The attribute names/shapes mirror the C++ coupling (probed from
+    mliap_unified_couple.pyx): rij per pair, pair_i/pair_j indices,
+    elems per atom, iatoms the local list, f a writable array, energy
+    and eatoms plain assignable fields. No ghosts here: every atom is
+    local, so iatoms is the full range.
+    """
+
+    def __init__(self, rij, pair_i, pair_j, elems, iatoms, eflag=True):
+        self.rij = rij
+        self.pair_i = pair_i
+        self.pair_j = pair_j
+        self.elems = elems
+        self.iatoms = iatoms
+        self.eflag = eflag
+        self.f = np.zeros((len(elems), 3))
+        self.energy = None
+        self.eatoms = None
+
+    def update_pair_forces(self, g):
+        # Mirror of the C++ semantics (mliap_unified.cpp): the pair force
+        # is added to the center atom and subtracted from the neighbor.
+        # In the fake there are no ghosts, so every j is local.
+        for ii in range(len(g)):
+            i = self.pair_i[ii]
+            j = self.pair_j[ii]
+            self.f[i] += g[ii]
+            self.f[j] -= g[ii]
+
+
+def _make_glue(model, std, element_types):
+    """Glue over a wrapper, with the element list the fake data uses."""
+    wrapper = _make_wrapper(model, std)
+    return MliapPaiNN(wrapper, element_types)
+
+
+def test_mliappy_glue_writes_energy_and_forces():
+    # The glue's promise, pinned end to end on a fake data object: the
+    # energy it writes equals the training pipeline's physical total,
+    # and the forces it scatters into data.f equal -dE/dx of that total
+    # (finite differences). float64: the sign derivation
+    # (F_i = +dE/drij, rij = x[j]-x[i]) is what this test really guards.
+    model = PaiNNModel(**_small_model_kwargs()).double()
+    std = _make_standardizer()
+    element_types = ["H", "C", "O"]
+    glue = _make_glue(model, std, element_types)
+    z, pos, graph_indexes = _system()
+    idx_i, idx_j = model._radius_graph(pos, graph_indexes)
+
+    elem_idx = {1: 0, 6: 1, 8: 2}  # z -> index into element_types
+    elems = np.array([elem_idx[int(zz)] for zz in z], dtype=np.int32)
+    data = FakeUnifiedData(
+        rij=(pos[idx_j] - pos[idx_i]).detach().numpy(),
+        pair_i=idx_i.numpy().astype(np.int32),
+        pair_j=idx_j.numpy().astype(np.int32),
+        elems=elems,
+        iatoms=np.arange(len(z), dtype=np.int32),
+    )
+    glue.compute_gradients(data)
+
+    # Energy: the glue's total equals the pipeline's physical energy.
+    # data.energy is a Python float by contract - cast to the pipeline's
+    # dtype BEFORE the assertions (torch.tensor() would silently default
+    # to float32, and mixing dtypes in allclose is an error).
+    pipeline = std.inverse(model.energy(z, pos, graph_indexes), z, graph_indexes)
+    expected = pipeline.sum()
+    glued_total = torch.tensor(data.energy, dtype=expected.dtype)
+    glued_atom_sum = torch.tensor(data.eatoms.sum(), dtype=expected.dtype)
+
+    assert torch.allclose(glued_total, expected, atol=1e-8)
+    assert torch.allclose(glued_atom_sum, expected, atol=1e-8)
+
+    # Forces: central differences of the pipeline physical energy w.r.t.
+    # positions (radius_graph is stable under 1e-6 perturbations at
+    # these random geometries - all pairs are far from the cutoff).
+    eps = 1e-6
+    f_fd = torch.zeros(len(z), 3, dtype=torch.float64)
+    pos0 = pos.detach().clone()
+    for i in range(len(z)):
+        for j in range(3):
+            p_plus = pos0.clone()
+            p_plus[i, j] += eps
+            p_minus = pos0.clone()
+            p_minus[i, j] -= eps
+            e_plus = std.inverse(
+                model.energy(z, p_plus, graph_indexes), z, graph_indexes
+            ).sum()
+            e_minus = std.inverse(
+                model.energy(z, p_minus, graph_indexes), z, graph_indexes
+            ).sum()
+            f_fd[i, j] = -(e_plus - e_minus) / (2 * eps)
+
+    assert f_fd.abs().max() > 1e-6  # not a gradient-flat geometry
+    rel_error = (torch.tensor(data.f) - f_fd).abs().max() / f_fd.abs().max()
+    assert rel_error < 1e-4
