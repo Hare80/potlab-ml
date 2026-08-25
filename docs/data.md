@@ -40,6 +40,9 @@ applies to **labels** — it never depends on whether the model outputs per-atom
 
 ## Periodic systems: VASP via ASE
 
+> **Status: specification only, not yet implemented.** This section is the design for the
+> future `VaspDataModule` (M7 in [PLAN.md](../PLAN.md)); there is no `potlab/data/vasp.py` yet.
+
 ### Reading VASP output
 
 Prefer `vasprun.xml` (`OUTCAR` works but is slower):
@@ -129,6 +132,7 @@ some form of it); datasets shipping precomputed refs (QM9) are the exception, no
 ### PyG version note
 
 Graph-building backends differ between PyG versions (2.6.x uses `torch-cluster`, 2.8.x uses
-`pyg-lib`; padding behavior around `max_num_neighbors` is not identical). Pin
-`torch-geometric` in `environment.yml` and keep graph building confined to adapters so the
-rest of the code never notices.
+`pyg-lib`; padding behavior around `max_num_neighbors` is not identical). `torch`,
+`torch-geometric` and `lightning-fabric` are runtime requirements not yet pinned in
+`pyproject.toml` — pin `torch-geometric` there and keep graph building confined to adapters
+so the rest of the code never notices.

@@ -25,13 +25,13 @@ These three decisions are made up front and are not revisited later:
 ```
 potlab-ml/
 ├── configs/default.yaml
-├── scripts/{train,evaluate,export_lammps}.py
+├── scripts/{train,export_lammps,make_mliap_pickle}.py
 ├── potlab/
 │   ├── config.py, registry.py
 │   ├── data/{base,transforms,qm9}.py        (+ vasp.py in the future)
 │   ├── models/{base.py, painn/{core,model}.py}
 │   ├── training/{trainer,metrics,callbacks}.py
-│   └── export/lammps.py
+│   └── export/{lammps,mliappy}.py
 ├── tests/
 └── runs/<run_name>/
 ```
@@ -105,10 +105,32 @@ TorchScript was dropped at M4 (`torch.jit.script` deprecated upstream); the MLIA
 
 **Acceptance:** `--config configs/toy.yaml` trains, visualizes, checkpoints, and passes the M4 test suite. This proves the registry + protocol design, and is the template for every future model and dataset.
 
+### M7 — VaspDataModule (planned, not started)
+
+- Implement `potlab/data/vasp.py`: `VaspDataModule` (`@register_dataset("vasp")`) reading VASP
+  output (`vasprun.xml` / `OUTCAR`) via ASE into the [DESIGN.md](DESIGN.md#3-data-contract-the-batch)
+  batch contract — PBC neighbor lists (ASE `primitive_neighbor_list` with shift vectors `S`),
+  per-frame batching for varying cells, and trajectory-aware splitting.
+- Implement `VaspStandardizer`: fit per-element references by `np.linalg.lstsq`, then mean/std.
+- The full design is already written in [docs/data.md](docs/data.md) ("Periodic systems: VASP
+  via ASE"); this milestone is the implementation of that section.
+
+**Acceptance:** a VASP trajectory trains end-to-end (the force-loss term engages via
+`has_forces`), and the model passes the M4 suite on the periodic data.
+
+### M8 — Self-active learning (planned, not started)
+
+- Add a loop that proposes new structures, scores them (e.g. force-error / uncertainty),
+  selects the informative ones, and feeds them back into the training set for the next round.
+- No design decided yet — this is a placeholder until M7 lands and the labeling source
+  (DFT / a trusted reference potential) is chosen.
+
+**Acceptance:** to be defined when the approach is chosen.
+
 ## Recommended execution order
 
 ```
-M0 → M1 → M3 → M2 → M4 → M5 → M6
+M0 → M1 → M3 → M2 → M4 → M5 → M6 → M7 → M8
 ```
 
 Note the swap: **trainer (M3) before model split (M2)**. Rationale: M1 leaves you with a working end-to-end pipeline that reproduces the baseline — the old code is your regression oracle. Only then do you open the model's internals (M2), re-verify against the oracle, and let the permanent test suite (M4) lock behavior in. Every step keeps a runnable, comparable system.
@@ -119,6 +141,6 @@ Note the swap: **trainer (M3) before model split (M2)**. Rationale: M1 leaves yo
 |---|---|
 | MLIAP-Python plugin not found by LAMMPS (PYTHONPATH / Python-enabled build) | Test the plugin early on WSL2/Linux with the conda env's Python; keep the plugin thin (BaseModel + standardizer.inverse only) |
 | Units baked incorrectly into the export | Export must go through the standardizer inverse; the parity check (M5) compares against the training-time pipeline, not the raw core |
-| PyG version drift (2.6.1 vs 2.8 `radius_graph` padding behavior differs) | Pin `torch-geometric` in `environment.yml`; the trainer only ever depends on the batch contract, never on graph-building internals |
+| PyG version drift (2.6.1 vs 2.8 `radius_graph` padding behavior differs) | Pin `torch-geometric` in `pyproject.toml`; the trainer only ever depends on the batch contract, never on graph-building internals |
 | MD-frame leakage in future periodic datasets | Split by trajectory/simulation run, never by shuffling frames (see [docs/data.md](docs/data.md)) |
 | Scope creep | Each milestone ends with checkable acceptance criteria; visualization stays simple (CSV + one panel figure + TensorBoard) |

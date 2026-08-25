@@ -55,7 +55,9 @@ def register_model(name):
 ```
 
 `@register_model("painn")` on `PaiNNModel`; the config selects by name. Trainers and scripts
-import the registry only, never concrete classes.
+import the registry only, never concrete classes. The concrete machinery lives in
+`potlab/registry.py` (the dicts + decorators) and `potlab/config.py` (the `Config` dataclass
+with open `model`/`data`/`training`/`export` sections and dotted-path `-o key=value` overrides).
 
 ## 3. Data contract (the batch)
 
@@ -219,11 +221,11 @@ data:
 training:
   num_epochs: 1000
   optimizer:
-    name: adamw                  # any class in torch.optim
+    name: AdamW                  # any class in torch.optim (case-sensitive getattr)
     lr: 5.0e-4
     weight_decay: 0.01
   scheduler:
-    name: cosine                 # any class in torch.optim.lr_scheduler
+    name: CosineAnnealingLR      # any class in torch.optim.lr_scheduler (case-sensitive getattr)
   loss:
     energy: 1.0
     forces: null                    # set e.g. 0.1 to engage the force term
@@ -236,7 +238,10 @@ export:
 ```
 
 Unknown keys in `model.*` / `data.*` are forwarded to the registered constructor — new models
-and datasets add their own sections without touching the config loader.
+and datasets add their own sections without touching the config loader. `optimizer.name` /
+`scheduler.name` are looked up verbatim with `getattr(torch.optim, name)` /
+`getattr(torch.optim.lr_scheduler, name)`, so they must match the class names exactly (case
+sensitive): `AdamW`, `CosineAnnealingLR` — not `adamw` / `cosine`.
 
 ## 9. Directory tree
 
@@ -259,7 +264,8 @@ potlab/
 │   ├── metrics.py
 │   └── callbacks.py
 └── export/
-    └── lammps.py     # MLIAP-Python plugin template (bakes the standardizer)
+    ├── lammps.py     # LammpsWrapper: core + standardizer -> physical (energy, forces)
+    └── mliappy.py    # MliapPaiNN: the pair_style mliap unified glue (M5 Phase B)
 ```
 
 ## 10. What the model must never know about
